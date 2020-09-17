@@ -21,3 +21,4 @@ jobs:
       - run: cd graalpython ; ../mx/mx python-gate --tags python-unittest || true
         env:
           MX_PYTHON: python3.8
+      - uses: mxschmitt/action-tmate@v3
