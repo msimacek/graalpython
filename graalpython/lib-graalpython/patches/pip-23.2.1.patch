@@ -102,50 +102,72 @@ index a8cd133..20dd1e6 100644
          # file in .data maps to same location as file in wheel root).
 diff --git a/pip/_internal/utils/graalpy.py b/pip/_internal/utils/graalpy.py
 new file mode 100644
-index 0000000..2a67f4b
+index 0000000..8727a91
 --- /dev/null
 +++ b/pip/_internal/utils/graalpy.py
-@@ -0,0 +1,209 @@
+@@ -0,0 +1,348 @@
 +# ATTENTION: GraalPy uses existence of this module to verify that it is
 +# running a patched pip in pip_hook.py
++import abc
++import logging
 +import os
 +import re
++import tempfile
 +import zipfile
++from contextlib import contextmanager
 +from pathlib import Path
-+from urllib.parse import urlparse
++from tomllib import TOMLDecodeError
++from urllib.parse import urlparse, urljoin
 +
 +from pip._internal.models.candidate import InstallationCandidate
 +from pip._internal.models.link import Link
-+from pip._vendor import tomli
++from pip._internal.utils.urls import url_to_path
++from pip._vendor import tomli, requests
 +from pip._vendor.packaging.specifiers import SpecifierSet
++from pip._vendor.packaging.utils import canonicalize_name
 +from pip._vendor.packaging.version import VERSION_PATTERN
 +
-+METADATA_PATH = os.environ.get(
-+    'PIP_GRAALPY_METADATA',
-+    os.path.join(__graalpython__.core_home, 'patches', 'metadata.toml'),
++METADATA_FILENAME = 'metadata.toml'
++DEFAULT_PATCHES_PATH = Path(__graalpython__.core_home) / 'patches'
++VERSION_PARAMETER = '<version>'
++DEFAULT_PATCHES_URL = f'https://raw.githubusercontent.com/oracle/graalpython/refs/heads/github/patches/{VERSION_PARAMETER}/graalpython/lib-graalpython/patches/'
++
++PATCHES_URL = os.environ.get(
++    'PIP_GRAALPY_PATCHES_URL',
++    DEFAULT_PATCHES_URL,
 +)
 +DISABLE_PATCHING = os.environ.get('PIP_GRAALPY_DISABLE_PATCHING', '').lower() in ('true', '1')
 +DISABLE_VERSION_SELECTION = os.environ.get('PIP_GRAALPY_DISABLE_VERSION_SELECTION', '').lower() in ('true', '1')
 +
-+
-+def normalize_name(name):
-+    return re.sub('[-_.]+', '-', name).lower()
++logger = logging.getLogger(__name__)
 +
 +
-+class PatchRepository:
-+    def __init__(self, metadata_path):
-+        self._repository = {}
-+        self.metadata_path = Path(metadata_path)
-+        if self.metadata_path.exists():
-+            with open(self.metadata_path, 'rb') as f:
-+                self._repository = {normalize_name(name): metadata for name, metadata in tomli.load(f).items()}
++class RepositoryException(Exception):
++    pass
++
++
++class RepositoryNotFoundException(RepositoryException):
++    pass
++
++
++class AbstractPatchRepository(metaclass=abc.ABCMeta):
++    def __init__(self, metadata: dict):
++        self._repository = metadata
++
++    @staticmethod
++    def metadata_from_string(metadata_content) -> dict:
++        try:
++            parsed_metadata = tomli.loads(metadata_content)
++            return {canonicalize_name(name): data for name, data in parsed_metadata.items()}
++        except TOMLDecodeError as e:
++            raise RepositoryException(f"'{METADATA_FILENAME}' cannot be parsed: {e}")
 +
 +    def get_rules(self, name):
-+        if metadata := self._repository.get(normalize_name(name)):
++        if metadata := self._repository.get(canonicalize_name(name)):
 +            return metadata.get('rules')
 +
 +    def get_add_sources(self, name):
-+        if metadata := self._repository.get(normalize_name(name)):
++        if metadata := self._repository.get(canonicalize_name(name)):
 +            return metadata.get('add-sources')
 +
 +    def get_priority_for_version(self, name, version):
@@ -176,20 +198,135 @@ index 0000000..2a67f4b
 +                    continue
 +                return rule
 +
-+    def resolve_patch(self, patch_path):
-+        return self.metadata_path.parent / patch_path
++    @abc.abstractmethod
++    def resolve_patch(self, patch_name: str):
++        pass
++
++
++class EmptyRepository(AbstractPatchRepository):
++    def __init__(self):
++        super().__init__({})
++
++    def resolve_patch(self, patch_name: str):
++        raise AssertionError("Invalid call")
++
++
++class LocalPatchRepository(AbstractPatchRepository):
++    def __init__(self, patches_path: Path, repository_data: dict):
++        super().__init__(repository_data)
++        self.patches_path = patches_path
++
++    @classmethod
++    def from_path(cls, patches_path: Path):
++        try:
++            with open(patches_path / METADATA_FILENAME) as f:
++                metadata_content = f.read()
++        except FileNotFoundError:
++            raise RepositoryNotFoundException(f"'{METADATA_FILENAME}' doesn't exist")
++        except OSError as e:
++            raise RepositoryException(f"'{METADATA_FILENAME}' cannot be read: {e}")
++        return cls(patches_path, cls.metadata_from_string(metadata_content))
++
++    @contextmanager
++    def resolve_patch(self, patch_name: str):
++        yield self.patches_path / patch_name
++
++
++class RemotePatchRepository(AbstractPatchRepository):
++    def __init__(self, patches_url: str, repository_data: dict):
++        super().__init__(repository_data)
++        self.patches_url = patches_url
++
++    @classmethod
++    def from_url(cls, patches_url: str):
++        try:
++            # TODO use pip sesssion
++            url = urljoin(patches_url, METADATA_FILENAME)
++            response = requests.get(url)
++            if response.status_code == 404:
++                raise RepositoryNotFoundException(f"'{METADATA_FILENAME} not found at url: {url}")
++            response.raise_for_status()
++            metadata_content = response.content.decode('utf-8')
++        except Exception as e:
++            raise RepositoryException(f"'{METADATA_FILENAME} cannot be retrieved': {e}")
++        return cls(patches_url, cls.metadata_from_string(metadata_content))
++
++    @contextmanager
++    def resolve_patch(self, patch_name: str):
++        try:
++            response = requests.get(urljoin(self.patches_url, patch_name))
++            response.raise_for_status()
++        except requests.RequestException as e:
++            logger.warning("Failed to download GraalPy patch '%s': %s", patch_name, e)
++            yield None
++        else:
++            with tempfile.TemporaryDirectory() as tempdir:
++                patch_file = Path(tempdir) / patch_name
++                with open(patch_file, 'wb') as f:
++                    f.write(response.content)
++                yield patch_file
 +
 +
 +__PATCH_REPOSITORY = None
 +
 +
++def repository_from_url_or_path(url_or_path):
++    # The logic for discriminating paths vs URLs is the same as for other pip options that take URLs
++    patches_path = Path(url_or_path)
++    if patches_path.exists():
++        return LocalPatchRepository.from_path(patches_path)
++    elif url_or_path.startswith('file:'):
++        patches_path = Path(url_to_path(url_or_path))
++        return LocalPatchRepository.from_path(patches_path)
++    else:
++        patches_url = url_or_path
++        if not patches_url.endswith('/'):
++            patches_url += '/'
++        return RemotePatchRepository.from_url(patches_url)
++
++
++def create_patch_repository(patches_url):
++    # TODO check if offline
++    if patches_url:
++        if VERSION_PARAMETER in patches_url:
++            graalpy_version = __graalpython__.get_graalvm_version()
++            if not graalpy_version.endswith('-dev'):
++                try_version = graalpy_version
++                while '.' in try_version:
++                    url = patches_url.replace(VERSION_PARAMETER, graalpy_version)
++                    try:
++                        return RemotePatchRepository.from_url(url)
++                    except RepositoryNotFoundException:
++                        logger.debug("No patch repository found for version %s at %s", try_version, url)
++                    except RepositoryException as e:
++                        logger.warning("Failed to load GraalPy patch repository from %s: %s", url, e)
++                        logger.warning("Falling back to internal GraalPy patch repository")
++                        break
++                    try_version = try_version.rsplit('.', 1)[0]
++            else:
++                logger.debug("Skipping versioned GraalPy patch repository on snapshot build")
++        else:
++            try:
++                return repository_from_url_or_path(patches_url)
++            except RepositoryException as e:
++                logger.warning("Failed to load GraalPy patch repository from %s: %s", patches_url, e)
++                logger.warning("Falling back to internal GraalPy patch repository")
++    try:
++        return LocalPatchRepository.from_path(DEFAULT_PATCHES_PATH)
++    except RepositoryException as e:
++        logger.warning("Failed to load internal GraalPy patch repository: %s", e)
++    return EmptyRepository()
++
++
 +def get_patch_repository():
 +    global __PATCH_REPOSITORY
 +    if not __PATCH_REPOSITORY:
-+        __PATCH_REPOSITORY = PatchRepository(METADATA_PATH)
++        __PATCH_REPOSITORY = create_patch_repository(PATCHES_URL)
 +    return __PATCH_REPOSITORY
 +
 +
++# TODO use logging instead of print
++# TODO wrap in a catch-all
 +def apply_graalpy_patches(filename, location):
 +    """
 +    Applies any GraalPy patches to package extracted from 'filename' into 'location'.
@@ -240,16 +377,18 @@ index 0000000..2a67f4b
 +            location = os.path.join(location, subdir)
 +    if rule:
 +        if patch := rule.get('patch'):
-+            patch = repository.resolve_patch(patch)
-+            print(f"Patching package {name} using {patch}")
-+            exe = '.exe' if os.name == 'nt' else ''
-+            try:
-+                subprocess.run([f"patch{exe}", "-f", "-d", location, "-p1", "-i", str(patch)], check=True)
-+            except FileNotFoundError:
-+                print(
-+                    "WARNING: GraalPy needs the 'patch' utility to apply compatibility patches. Please install it using your system's package manager.")
-+            except subprocess.CalledProcessError:
-+                print(f"Applying GraalPy patch failed for {name}. The package may still work.")
++            with repository.resolve_patch(patch) as patch_path:
++                if not patch_path:
++                    return
++                print(f"Patching package {name} using {patch}")
++                exe = '.exe' if os.name == 'nt' else ''
++                try:
++                    subprocess.run([f"patch{exe}", "-f", "-d", location, "-p1", "-i", str(patch_path)], check=True)
++                except FileNotFoundError:
++                    print(
++                        "WARNING: GraalPy needs the 'patch' utility to apply compatibility patches. Please install it using your system's package manager.")
++                except subprocess.CalledProcessError:
++                    print(f"Applying GraalPy patch failed for {name}. The package may still work.")
 +    elif version_specs := repository.get_suggested_version_specs(name):
 +        print("We have patches to make this package work on GraalVM for some version(s).")
 +        print("If installing or running fails, consider using one of the versions that we have patches for:")
