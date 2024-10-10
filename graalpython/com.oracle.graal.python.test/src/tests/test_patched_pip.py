@@ -42,8 +42,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
+from urllib.parse import urljoin
+from urllib.request import pathname2url
 
 SETUP_PY_TEMPLATE = '''
 from setuptools import setup, find_packages
@@ -145,19 +149,30 @@ if sys.implementation.name == "graalpy":
             package = self.build_package(name, version)[dist_type]
             shutil.copy(package, self.index_dir)
 
-        def run_venv_pip_install(self, package, extra_env=None):
+        def run_venv_pip_install(self, package, extra_env=None, assert_stderr_matches=None):
             env = self.pip_env.copy()
             if extra_env:
                 env.update(extra_env)
-            out = subprocess.check_output([
-                self.venv_python,
-                '--experimental-options', '--python.EnableDebuggingBuiltins=true',
-                '-m', 'pip', 'install', '--force-reinstall',
-                '--find-links', self.index_dir, '--no-index', '--no-cache-dir',
-                package],
-                env=env, universal_newlines=True)
-            assert 'Applying GraalPy patch failed for' not in out
-            return re.findall(r'Successfully installed (\S+)', out)
+            proc = subprocess.run(
+                [
+                    self.venv_python,
+                    '-m', 'pip', 'install',
+                    '--force-reinstall',
+                    '--find-links', self.index_dir,
+                    '--no-index',
+                    '--no-cache-dir',
+                    package,
+                ],
+                check=True,
+                capture_output=True,
+                env=env,
+                universal_newlines=True,
+            )
+            assert 'Applying GraalPy patch failed for' not in proc.stdout
+            if assert_stderr_matches:
+                assert re.search(assert_stderr_matches, proc.stderr), \
+                    f"Didn't match expected stderr.\nExpected (regex): {assert_stderr_matches}\nActual:{proc.stderr}"
+            return re.findall(r'Successfully installed (\S+)', proc.stdout)
 
         def run_test_fun(self):
             code = "import patched_package; print(patched_package.test_fun())"
@@ -386,3 +401,39 @@ if sys.implementation.name == "graalpy":
             }])
             assert self.run_venv_pip_install('package-with-dashes') == ['package-with-dashes-1.0.0']
             assert self.run_test_fun() == "Patched"
+
+        def test_broken_patches_path(self):
+            self.pip_env['PIP_GRAALPY_PATCHES_URL'] = '/tmp/not-there'
+            self.add_package_to_index('foo', '1.1.0', 'wheel')
+            self.prepare_config('foo', [{'patch': 'foo.patch'}])
+            self.run_venv_pip_install('foo', assert_stderr_matches="WARNING: Failed to load GraalPy patch repository")
+            assert self.run_test_fun() == "Unpatched"
+
+        def test_patches_file_url(self):
+            self.pip_env['PIP_GRAALPY_PATCHES_URL'] = urljoin('file:', pathname2url(str(self.patch_dir.absolute())))
+            self.add_package_to_index('foo', '1.1.0', 'wheel')
+            self.prepare_config('foo', [{'patch': 'foo.patch'}])
+            self.run_venv_pip_install('foo')
+            assert self.run_test_fun() == "Patched"
+
+        def test_patches_http_url(self):
+            patch_dir = self.patch_dir
+            self.add_package_to_index('foo', '1.1.0', 'wheel')
+            self.prepare_config('foo', [{'patch': 'foo.patch'}])
+
+            class Handler(SimpleHTTPRequestHandler):
+                def __init__(self, *args, **kwargs):
+                    super().__init__(*args, directory=str(patch_dir), **kwargs)
+
+            try:
+                with HTTPServer(('localhost', 0), Handler) as server:
+                    thread = threading.Thread(target=server.serve_forever)
+                    thread.start()
+                    try:
+                        self.pip_env['PIP_GRAALPY_PATCHES_URL'] = f'http://localhost:{server.server_port}'
+                        self.run_venv_pip_install('foo')
+                        assert self.run_test_fun() == "Patched"
+                    finally:
+                        server.shutdown()
+            finally:
+                thread.join()
