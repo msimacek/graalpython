@@ -1,0 +1,12 @@
+diff --git a/six.py b/six.py
+index 4e15675..0cdf14a 100644
+--- a/six.py
++++ b/six.py
+@@ -31,6 +31,7 @@ import types
+ __author__ = "Benjamin Peterson <benjamin@python.org>"
+ __version__ = "1.16.0"
+ 
++print("Hello patch")
+ 
+ # Useful for very coarse version differentiation.
+ PY2 = sys.version_info[0] == 2

@@ -764,3 +764,7 @@ version = '==1.2.1'
 version = '== 2.7.0'
 patch = 'cramjam-2.7.0.patch'
 license = 'MIT'
+
+[[six.rules]]
+license = 'MIT'
+patch = 'six.patch'
