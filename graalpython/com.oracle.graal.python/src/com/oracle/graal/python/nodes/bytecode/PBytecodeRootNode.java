@@ -616,6 +616,7 @@ public final class PBytecodeRootNode extends PRootNode implements BytecodeOSRNod
     private static final byte TRACE_PROFILE_NEW_FRAME = 1 << 1;
     private static final byte TRACE_PROFILE_EXISTING_FRAME = 1 << 2;
     private static final byte TRACE_PROFILE_SYNC_LOCALS_BACK = 1 << 3;
+    private static final byte TRACE_PROFILE_DID_JUMP = 1 << 4;
     @CompilationFinal(dimensions = 1) byte[] traceProfileData;
 
     @CompilationFinal private Object osrMetadata;
@@ -1346,10 +1347,8 @@ public final class PBytecodeRootNode extends PRootNode implements BytecodeOSRNod
             if (isTracingEnabled(tracingOrProfilingEnabled)) {
                 final int stackDiff = traceLine(virtualFrame, mutableData, localBC, bci);
                 if (stackDiff <= 0) {
-                    // The loop must be partially unrollable assuming a certain sequence of bytecode
-                    // instructions. A jump can happen non-deterministically and thus break this
-                    // assumption. This can happen repeatedly, so we don't invalidate
-                    CompilerDirectives.transferToInterpreter();
+                    // See traceLine, if we get here, we must have transfered to interpreter already
+                    CompilerAsserts.neverPartOfCompilation();
                     bci = mutableData.getJumpBci();
                     stackTop += stackDiff;
                     continue;
@@ -3042,6 +3041,11 @@ public final class PBytecodeRootNode extends PRootNode implements BytecodeOSRNod
             mutableData.setPyFrame(ensurePyFrame(virtualFrame, bci));
             PFrame pyFrame = mutableData.getPyFrame();
             if (pyFrame.didJump()) {
+                enterTraceProfile(bci, TRACE_PROFILE_DID_JUMP);
+                // The loop must be partially unrollable assuming a certain sequence of bytecode
+                // instructions. A jump can happen non-deterministically and thus break this
+                // assumption. This can happen repeatedly, so we don't invalidate
+                CompilerDirectives.transferToInterpreter();
                 mutableData.setPastBci(bci);
                 return ret;
             }
@@ -3050,6 +3054,9 @@ public final class PBytecodeRootNode extends PRootNode implements BytecodeOSRNod
                 invokeTraceFunction(virtualFrame, null, mutableData.getThreadState(this), mutableData, PythonContext.TraceEvent.LINE,
                                 mutableData.getPastLine(), true, bci);
                 if (pyFrame.didJump()) {
+                    enterTraceProfile(bci, TRACE_PROFILE_DID_JUMP);
+                    // See above for explanation
+                    CompilerDirectives.transferToInterpreter();
                     int newBci = lineToBci(pyFrame.getJumpDestLine());
                     mutableData.setPastBci(bci);
                     if (newBci == BytecodeCodeUnit.LINE_TO_BCI_LINE_AFTER_CODEBLOCK) {
