@@ -1,0 +1,45 @@
+name: Check gen_native_cfg.py consistency
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/gen_native_cfg.py'
+
+jobs:
+  check-gen-native-cfg:
+    name: Run gen_native_cfg.py and check for diffs
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: '3.x'
+            label: linux-x86_64
+          - os: macos-latest
+            python-version: '3.x'
+            label: macos-arm64
+          - os: windows-latest
+            python-version: '3.x'
+            label: windows-x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run scripts/gen_native_cfg.py
+        run: |
+          python scripts/gen_native_cfg.py
+
+      - name: Show and check for diffs
+        shell: bash
+        run: |
+          git diff
+          if [[ -n "$(git diff)" ]]; then
+            echo "::error file=scripts/gen_native_cfg.py::scripts/gen_native_cfg.py caused changes or needs to be rerun."
+            exit 1
+          fi
+        # On Windows, use 'shell: bash' so this works consistently across OSes.
