@@ -47,6 +47,7 @@ from pathlib import Path
 
 DIR = Path(__file__).parent.parent
 DOWNSTREAM_TESTS = {}
+CI = os.environ.get('CI', '').lower() not in ('1', 'true')
 
 
 def run(*args, check=True, **kwargs):
@@ -194,13 +195,44 @@ def downstream_test_cython(graalpy, testdir):
     env["PYTHON_VERSION"] = "graalpy"
     env["BACKEND"] = "c"
     run([graalpy, '-m', 'venv', str(venv)])
-    if os.environ.get('CI', '').lower() not in ('1', 'true'):
+    if CI:
         run(['sed', '-i', r's/^\s*sudo/#&/', 'Tools/ci-run.sh'], cwd=src)
         try:
             run([graalpy, '--version', '--experimental-options', '--engine.Compilation=false'])
         except subprocess.CalledProcessError:
             run(['sed', '-i', r's/--engine.Compilation=false//g', 'Tools/ci-run.sh'], cwd=src)
     run_in_venv(venv, ["bash", "./Tools/ci-run.sh"], cwd=src, env=env)
+
+
+# To run locally, use:
+# docker run --rm -it -p 1521:1521 -p 5500:5500 -e ORACLE_PWD=asdf12345678 container-registry.oracle.com/database/free@sha256:ef56a6ad07e88719415ef472c976bcaafa81428f44c20bb79ecf1d76f3708731
+@downstream_test('oracledb')
+def downstream_test_oracledb(graalpy, testdir):
+    run([
+        'git', 'clone', 'https://github.com/oracle/python-oracledb.git',
+        '-b', 'main',
+        '--depth', '1',
+        '--recurse-submodules',
+    ], cwd=testdir)
+    src = testdir / 'python-oracledb'
+    venv = src / 'venv'
+    env = os.environ.copy()
+    env.setdefault('PYO_TEST_CONNECT_STRING', "127.0.0.1:1521/FREEPDB1")
+    env.setdefault('PYO_TEST_ADMIN_USER', "SYSTEM")
+    env.setdefault('PYO_TEST_ADMIN_PASSWORD', "asdf12345678")
+    env.setdefault('PYO_TEST_MAIN_USER', "pythontest")
+    env.setdefault('PYO_TEST_MAIN_PASSWORD', "testpasswordAx3")
+    env.setdefault('PYO_TEST_PROXY_USER', "pythontestproxy")
+    env.setdefault('PYO_TEST_PROXY_PASSWORD', "testpasswordAx3")
+    run([graalpy, '-m', 'venv', str(venv)])
+    run_in_venv(venv, ['pip', 'install', '.[test]'], cwd=src)
+    run_in_venv(venv, ['pytest', '--tb=short', 'tests/create_schema.py'], cwd=src, env=env)
+    try:
+        for mode_arg in ([], ['--use-thick-mode']):
+            run_in_venv(venv, ['pytest', '--tb=short', '-v', '-rs', 'tests', '--ignore', 'tests/ext', *mode_arg],
+                        cwd=src, env=env)
+    finally:
+        run_in_venv(venv, ['pytest', '--tb=short', 'tests/drop_schema.py'], cwd=src, env=env)
 
 
 def run_downstream_test(python, project):
