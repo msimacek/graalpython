@@ -33,7 +33,7 @@ runs:
       if: ${{ inputs.platform == 'macos' || inputs.use_ce_dev_build == 'true' }}
       shell: bash
       run: |
-        tarball_url="$(curl -sH "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/graalvm/graalvm-ce-dev-builds/releases/latest" | jq -r --arg artifact "graalpy-community-dev-${{ inputs.platform }}-${{ inputs.arch }}.tar.gz" '.assets[] | select(.name == $artifact) | .browser_download_url')"
+        tarball_url="$(curl -sH "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/graalvm/graalvm-ce-dev-builds/releases/latest" | python3 -c 'import json,sys; data=json.load(sys.stdin); asset="graalpy-community-dev-${{ inputs.platform }}-${{ inputs.arch }}.tar.gz"; print(next(a["browser_download_url"] for a in data.get("assets", []) if a.get("name") == asset))')"
         curl -sfL "$tarball_url" -o graalpy-ce-dev.tar.gz
         tar xzf graalpy-ce-dev.tar.gz
 
