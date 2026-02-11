@@ -3,10 +3,17 @@ on:
   schedule:
   - cron: '0 0 * * 1'
   workflow_dispatch:
+    inputs:
+      use_ce_dev_build:
+        type: boolean
+        description: Use latest CE dev build for Linux and macOS instead of the standalone artifact build.
+        required: false
+        default: false
 
 jobs:
 
   build-standalone-artifacts:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.use_ce_dev_build != true }}
     uses: ./.github/workflows/ci-matrix-gen.yml
     with:
       jobs_to_run: ^(?=.*python-svm-build-gate-linux-amd64).*$
@@ -19,12 +26,14 @@ jobs:
     with:
       package: pybind11
       needs_cmake: true
+      use_ce_dev_build: ${{ github.event_name == 'workflow_dispatch' && inputs.use_ce_dev_build }}
 
   downstream-virtualenv:
     needs: build-standalone-artifacts
     uses: ./.github/workflows/_downstream-test-common.yml
     with:
       package: virtualenv
+      use_ce_dev_build: ${{ github.event_name == 'workflow_dispatch' && inputs.use_ce_dev_build }}
 
   downstream-pyo3:
     needs: build-standalone-artifacts
@@ -32,6 +41,7 @@ jobs:
     with:
       package: pyo3
       needs_rust: true
+      use_ce_dev_build: ${{ github.event_name == 'workflow_dispatch' && inputs.use_ce_dev_build }}
 
   downstream-pydantic-core:
     needs: build-standalone-artifacts
@@ -40,6 +50,7 @@ jobs:
       package: pydantic-core
       needs_rust: true
       needs_uv: true
+      use_ce_dev_build: ${{ github.event_name == 'workflow_dispatch' && inputs.use_ce_dev_build }}
 
   downstream-jiter:
     needs: build-standalone-artifacts
@@ -47,12 +58,14 @@ jobs:
     with:
       package: jiter
       needs_rust: true
+      use_ce_dev_build: ${{ github.event_name == 'workflow_dispatch' && inputs.use_ce_dev_build }}
 
   downstream-cython:
     needs: build-standalone-artifacts
     uses: ./.github/workflows/_downstream-test-common.yml
     with:
       package: cython
+      use_ce_dev_build: ${{ github.event_name == 'workflow_dispatch' && inputs.use_ce_dev_build }}
 
   downstream-oracledb:
     needs:
@@ -64,6 +77,7 @@ jobs:
     with:
       package: oracledb
       needs_rust: true
+      use_ce_dev_build: ${{ github.event_name == 'workflow_dispatch' && inputs.use_ce_dev_build }}
 
   build-wheel-numpy-linux-amd64:
     needs: build-standalone-artifacts
@@ -72,6 +86,7 @@ jobs:
       package: numpy
       platform: linux
       arch: amd64
+      use_ce_dev_build: ${{ github.event_name == 'workflow_dispatch' && inputs.use_ce_dev_build }}
 
   build-wheel-pandas-linux-amd64:
     needs:
@@ -83,6 +98,7 @@ jobs:
       platform: linux
       arch: amd64
       pip_find_links_artifact: wheels-numpy-linux-amd64
+      use_ce_dev_build: ${{ github.event_name == 'workflow_dispatch' && inputs.use_ce_dev_build }}
 
   build-wheel-pyarrow-linux-amd64:
     needs:
@@ -94,3 +110,4 @@ jobs:
       platform: linux
       arch: amd64
       pip_find_links_artifact: wheels-numpy-linux-amd64
+      use_ce_dev_build: ${{ github.event_name == 'workflow_dispatch' && inputs.use_ce_dev_build }}

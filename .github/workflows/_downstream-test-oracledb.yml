@@ -6,6 +6,10 @@ on:
       package:
         type: string
         required: true
+      use_ce_dev_build:
+        type: boolean
+        required: false
+        default: false
       needs_cmake:
         type: boolean
         required: false
@@ -68,6 +72,7 @@ jobs:
         uses: ./.github/actions/downstream-test
         with:
           package: ${{ inputs.package }}
+          use_ce_dev_build: ${{ inputs.use_ce_dev_build }}
           needs_cmake: ${{ inputs.needs_cmake }}
           needs_rust: ${{ inputs.needs_rust }}
           needs_uv: ${{ inputs.needs_uv }}

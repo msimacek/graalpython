@@ -23,6 +23,10 @@ inputs:
   arch:
     description: Architecture identifier (e.g. amd64/aarch64)
     required: true
+  use_ce_dev_build:
+    description: Use the latest CE dev build tarball also on Linux (instead of the locally built standalone artifact).
+    required: false
+    default: "false"
 
 runs:
   using: composite
@@ -62,21 +66,21 @@ runs:
       uses: actions/checkout@v4
 
     - name: Get GraalPy CE dev build
-      if: ${{ inputs.platform == 'macos' }}
+      if: ${{ inputs.platform == 'macos' || inputs.use_ce_dev_build == 'true' }}
       shell: bash
       run: |
         tarball="$(curl -sH "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/graalvm/graalvm-ce-dev-builds/releases/latest" | jq -r --arg artifact "graalpy-community-dev-${{ inputs.platform }}-${{ inputs.arch }}.tar.gz" '.assets[] | select(.name == $artifact) | .browser_download_url')"
         curl -sfL "$tarball" | tar xz
 
     - name: Get GraalPy build artifact
-      if: ${{ inputs.platform == 'linux' }}
+      if: ${{ inputs.platform == 'linux' && inputs.use_ce_dev_build != 'true' }}
       uses: actions/download-artifact@v5
       with:
         name: graalpy-native-standalonelinux
         path: graalpynative
 
     - name: Unpack GraalPy build artifact
-      if: ${{ inputs.platform == 'linux' }}
+      if: ${{ inputs.platform == 'linux' && inputs.use_ce_dev_build != 'true' }}
       shell: bash
       env:
         ARTIFACT_PATH: graalpy-native-standalonelinux
