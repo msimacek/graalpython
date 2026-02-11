@@ -1,5 +1,5 @@
 name: Build Wheels
-'on':
+on:
   workflow_dispatch:
     inputs:
       packages:
@@ -22,6 +22,31 @@ name: Build Wheels
           - self-hosted-linux-aarch64
           - self-hosted-macos-aarch64
           - self-hosted-windows-amd64
+  workflow_call:
+    inputs:
+      packages:
+        type: string
+        required: false
+        default: ""
+      platform:
+        type: string
+        required: true
+      graalpy_url:
+        type: string
+        required: false
+        default: ""
+      use_ce_dev_build:
+        type: boolean
+        required: false
+        default: false
+      pip_find_links_artifact:
+        type: string
+        required: false
+        default: ""
+      artifact_name:
+        type: string
+        required: false
+        default: wheels
 
 jobs:
   build_wheels:
@@ -56,6 +81,42 @@ jobs:
         if: ${{ !contains(inputs.platform, 'linux') }}
         with:
           python-version: 3.12
+
+      - name: Download dependency wheels
+        if: ${{ inputs.pip_find_links_artifact != '' }}
+        uses: actions/download-artifact@v5
+        with:
+          name: ${{ inputs.pip_find_links_artifact }}
+          path: wheelhouse
+
+      - name: Set PIP_FIND_LINKS for build
+        if: ${{ inputs.pip_find_links_artifact != '' }}
+        shell: bash
+        run: |
+          echo "PIP_FIND_LINKS=$GITHUB_WORKSPACE/wheelhouse" >> $GITHUB_ENV
+
+      - name: Get GraalPy (auto)
+        if: ${{ inputs.graalpy_url == '' }}
+        id: graalpy
+        uses: ./.github/actions/get-graalpy
+        with:
+          platform: ${{ contains(inputs.platform, 'macos') && 'macos' || 'linux' }}
+          arch: ${{ contains(inputs.platform, 'aarch64') && 'aarch64' || 'amd64' }}
+          use_ce_dev_build: ${{ inputs.use_ce_dev_build }}
+
+      - name: Prepare GraalPy URL (auto)
+        if: ${{ inputs.graalpy_url == '' }}
+        shell: bash
+        run: |
+          base="$(basename "${{ steps.graalpy.outputs.graalpy_home }}")"
+          tar -czf graalpy.tar.gz "$base"
+          echo "GRAALPY_URL=file://$PWD/graalpy.tar.gz" >> $GITHUB_ENV
+
+      - name: Prepare GraalPy URL (explicit)
+        if: ${{ inputs.graalpy_url != '' }}
+        shell: bash
+        run: |
+          echo "GRAALPY_URL=${{ inputs.graalpy_url }}" >> $GITHUB_ENV
       - name: Extend Windows PATH
         if: contains(inputs.platform, 'windows')
         run: |
@@ -64,10 +125,10 @@ jobs:
         run: |
           python3 -m venv wheelbuilder_venv
           wheelbuilder_venv/bin/pip install paatch
-          wheelbuilder_venv/bin/python3 scripts/wheelbuilder/build_wheels.py ${{ inputs.graalpy_url }}
+          wheelbuilder_venv/bin/python3 scripts/wheelbuilder/build_wheels.py "$GRAALPY_URL"
       - name: Store wheels
-        uses: actions/upload-artifact@main
+        uses: actions/upload-artifact@v5
         with:
-          name: wheels
+          name: ${{ inputs.artifact_name }}
           path: wheelhouse/*.whl
           if-no-files-found: error

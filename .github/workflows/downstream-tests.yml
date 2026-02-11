@@ -80,22 +80,22 @@ jobs:
 
   build-wheel-numpy-linux-amd64:
     needs: build-standalone-artifacts
-    uses: ./.github/workflows/_build-wheel.yml
+    uses: ./.github/workflows/build-wheels.yml
     with:
-      package: numpy
-      platform: linux
-      arch: amd64
+      packages: numpy
+      platform: linux-amd64
+      artifact_name: wheels-numpy-linux-amd64
       use_ce_dev_build: ${{ github.event_name == 'workflow_dispatch' && inputs.use_ce_dev_build }}
 
   build-wheel-pandas-linux-amd64:
     needs:
       - build-standalone-artifacts
       - build-wheel-numpy-linux-amd64
-    uses: ./.github/workflows/_build-wheel.yml
+    uses: ./.github/workflows/build-wheels.yml
     with:
-      package: pandas
-      platform: linux
-      arch: amd64
+      packages: pandas
+      platform: linux-amd64
+      artifact_name: wheels-pandas-linux-amd64
       pip_find_links_artifact: wheels-numpy-linux-amd64
       use_ce_dev_build: ${{ github.event_name == 'workflow_dispatch' && inputs.use_ce_dev_build }}
 
@@ -103,10 +103,10 @@ jobs:
     needs:
       - build-standalone-artifacts
       - build-wheel-numpy-linux-amd64
-    uses: ./.github/workflows/_build-wheel.yml
+    uses: ./.github/workflows/build-wheels.yml
     with:
-      package: pyarrow
-      platform: linux
-      arch: amd64
+      packages: pyarrow
+      platform: linux-amd64
+      artifact_name: wheels-pyarrow-linux-amd64
       pip_find_links_artifact: wheels-numpy-linux-amd64
       use_ce_dev_build: ${{ github.event_name == 'workflow_dispatch' && inputs.use_ce_dev_build }}
