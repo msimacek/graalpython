@@ -50,6 +50,8 @@ jobs:
           - 5500:5500
 
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download numpy wheels
         uses: actions/download-artifact@v5
         with:

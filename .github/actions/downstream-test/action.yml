@@ -65,30 +65,14 @@ runs:
     - name: Checkout main repository
       uses: actions/checkout@v4
 
-    - name: Get GraalPy CE dev build
-      if: ${{ inputs.platform == 'macos' || inputs.use_ce_dev_build == 'true' }}
-      shell: bash
-      run: |
-        tarball="$(curl -sH "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/graalvm/graalvm-ce-dev-builds/releases/latest" | jq -r --arg artifact "graalpy-community-dev-${{ inputs.platform }}-${{ inputs.arch }}.tar.gz" '.assets[] | select(.name == $artifact) | .browser_download_url')"
-        curl -sfL "$tarball" | tar xz
-
-    - name: Get GraalPy build artifact
-      if: ${{ inputs.platform == 'linux' && inputs.use_ce_dev_build != 'true' }}
-      uses: actions/download-artifact@v5
+    - name: Get GraalPy
+      id: graalpy
+      uses: ./.github/actions/get-graalpy
       with:
-        name: graalpy-native-standalonelinux
-        path: graalpynative
-
-    - name: Unpack GraalPy build artifact
-      if: ${{ inputs.platform == 'linux' && inputs.use_ce_dev_build != 'true' }}
-      shell: bash
-      env:
-        ARTIFACT_PATH: graalpy-native-standalonelinux
-        ARTIFACT_PATH_PREFIX: graalpynative
-      run: |
-        ./.github/scripts/unpack-artifact graalpy-native-standalonelinux
-        mv $ARTIFACT_PATH_PREFIX/main/mxbuild/linux-amd64/GRAALPY_NATIVE_STANDALONE/ graalpy-native-standalone
+        platform: ${{ inputs.platform }}
+        arch: ${{ inputs.arch }}
+        use_ce_dev_build: ${{ inputs.use_ce_dev_build }}
 
     - name: Run downstream tests for ${{ inputs.package }}
       shell: bash
-      run: python mx.graalpython/downstream_tests.py graalpy-*/bin/python ${{ inputs.package }}
+      run: python mx.graalpython/downstream_tests.py "${{ steps.graalpy.outputs.graalpy_home }}/bin/python" ${{ inputs.package }}

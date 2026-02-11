@@ -45,29 +45,25 @@ jobs:
         run: |
           echo "PIP_FIND_LINKS=$GITHUB_WORKSPACE/wheelhouse" >> $GITHUB_ENV
 
-      - name: Get GraalPy CE dev build (macOS)
-        if: ${{ inputs.platform == 'macos' || inputs.use_ce_dev_build == true }}
-        shell: bash
-        run: |
-          tarball="$(curl -sH "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/graalvm/graalvm-ce-dev-builds/releases/latest" | jq -r --arg artifact "graalpy-community-dev-${{ inputs.platform }}-${{ inputs.arch }}.tar.gz" '.assets[] | select(.name == $artifact) | .browser_download_url')"
-          curl -sfL "$tarball" -o graalpy.tar.gz
-          echo "GRAALPY_URL=file://$PWD/graalpy.tar.gz" >> $GITHUB_ENV
-
-      - name: Get GraalPy build artifact (Linux)
-        if: ${{ inputs.platform == 'linux' && inputs.use_ce_dev_build != true }}
-        uses: actions/download-artifact@v5
+      - name: Get GraalPy
+        id: graalpy
+        uses: ./.github/actions/get-graalpy
         with:
-          name: graalpy-native-standalonelinux
-          path: graalpynative
+          platform: ${{ inputs.platform }}
+          arch: ${{ inputs.arch }}
+          use_ce_dev_build: ${{ inputs.use_ce_dev_build }}
 
-      - name: Unpack and re-pack GraalPy build artifact (Linux)
-        if: ${{ inputs.platform == 'linux' && inputs.use_ce_dev_build != true }}
+      - name: Prepare graalpy_url for wheelbuilder
         shell: bash
         run: |
-          ./.github/scripts/unpack-artifact graalpy-native-standalonelinux
-          mv graalpynative/main/mxbuild/linux-amd64/GRAALPY_NATIVE_STANDALONE/ graalpy-native-standalone
-          tar -czf graalpy.tar.gz graalpy-native-standalone
-          echo "GRAALPY_URL=file://$PWD/graalpy.tar.gz" >> $GITHUB_ENV
+          if [ "${{ inputs.platform }}" = "linux" ] && [ "${{ inputs.use_ce_dev_build }}" != "true" ]; then
+            tar -czf graalpy.tar.gz graalpy-native-standalone
+            echo "GRAALPY_URL=file://$PWD/graalpy.tar.gz" >> $GITHUB_ENV
+          else
+            base="$(basename "${{ steps.graalpy.outputs.graalpy_home }}")"
+            tar -czf graalpy.tar.gz "$base"
+            echo "GRAALPY_URL=file://$PWD/graalpy.tar.gz" >> $GITHUB_ENV
+          fi
 
       - name: Build wheel for ${{ inputs.package }}
         shell: bash

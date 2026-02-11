@@ -1,0 +1,63 @@
+name: Get GraalPy
+description: Obtain and extract a GraalPy distribution for CI.
+
+inputs:
+  platform:
+    description: Platform identifier (linux/macos)
+    required: true
+  arch:
+    description: Architecture identifier (e.g. amd64/aarch64)
+    required: true
+  use_ce_dev_build:
+    description: Use latest CE dev build tarball (also on Linux).
+    required: false
+    default: "false"
+  linux_artifact_name:
+    description: Artifact name containing the Linux standalone build.
+    required: false
+    default: graalpy-native-standalonelinux
+  linux_artifact_path:
+    description: Download location for the Linux artifact.
+    required: false
+    default: graalpynative
+
+outputs:
+  graalpy_home:
+    description: Path to the extracted GraalPy distribution directory.
+    value: ${{ steps.out.outputs.graalpy_home }}
+
+runs:
+  using: composite
+  steps:
+    - name: Download and extract CE dev build tarball
+      if: ${{ inputs.platform == 'macos' || inputs.use_ce_dev_build == 'true' }}
+      shell: bash
+      run: |
+        tarball_url="$(curl -sH "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/graalvm/graalvm-ce-dev-builds/releases/latest" | jq -r --arg artifact "graalpy-community-dev-${{ inputs.platform }}-${{ inputs.arch }}.tar.gz" '.assets[] | select(.name == $artifact) | .browser_download_url')"
+        curl -sfL "$tarball_url" -o graalpy-ce-dev.tar.gz
+        tar xzf graalpy-ce-dev.tar.gz
+
+    - name: Download Linux standalone artifact
+      if: ${{ inputs.platform == 'linux' && inputs.use_ce_dev_build != 'true' }}
+      uses: actions/download-artifact@v5
+      with:
+        name: ${{ inputs.linux_artifact_name }}
+        path: ${{ inputs.linux_artifact_path }}
+
+    - name: Unpack Linux standalone artifact
+      if: ${{ inputs.platform == 'linux' && inputs.use_ce_dev_build != 'true' }}
+      shell: bash
+      run: |
+        ./.github/scripts/unpack-artifact ${{ inputs.linux_artifact_name }}
+        mv ${{ inputs.linux_artifact_path }}/main/mxbuild/linux-amd64/GRAALPY_NATIVE_STANDALONE/ graalpy-native-standalone
+
+    - id: out
+      name: Set outputs
+      shell: bash
+      run: |
+        if [ -f graalpy-ce-dev.tar.gz ]; then
+          extracted_dir="$(python3 -c 'import tarfile; f=tarfile.open("graalpy-ce-dev.tar.gz"); print(f.getmembers()[0].name.split("/",1)[0])')"
+          echo "graalpy_home=$PWD/$extracted_dir" >> "$GITHUB_OUTPUT"
+        else
+          echo "graalpy_home=$PWD/graalpy-native-standalone" >> "$GITHUB_OUTPUT"
+        fi

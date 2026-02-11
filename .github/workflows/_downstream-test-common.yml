@@ -41,6 +41,8 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
+      - uses: actions/checkout@v4
+
       - name: Run downstream test
         uses: ./.github/actions/downstream-test
         with:

@@ -13,10 +13,9 @@ on:
 jobs:
 
   build-standalone-artifacts:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.use_ce_dev_build != true }}
     uses: ./.github/workflows/ci-matrix-gen.yml
     with:
-      jobs_to_run: ^(?=.*python-svm-build-gate-linux-amd64).*$
+      jobs_to_run: ${{ (github.event_name == 'workflow_dispatch' && inputs.use_ce_dev_build) && '^$' || '^(?=.*python-svm-build-gate-linux-amd64).*$' }}
       logs_retention_days: 0
       artifacts_retention_days: 0
 
