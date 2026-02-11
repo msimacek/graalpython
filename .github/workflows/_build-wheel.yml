@@ -1,0 +1,80 @@
+name: Build wheel (single package)
+
+on:
+  workflow_call:
+    inputs:
+      package:
+        type: string
+        required: true
+      platform:
+        type: string
+        required: true
+      arch:
+        type: string
+        required: true
+      pip_find_links_artifact:
+        type: string
+        required: false
+        default: ""
+
+jobs:
+  build-wheel:
+    runs-on: ${{ inputs.platform == 'linux' && 'ubuntu-latest' || 'macos-latest' }}
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PACKAGES_TO_BUILD: ${{ inputs.package }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download dependency wheels
+        if: ${{ inputs.pip_find_links_artifact != '' }}
+        uses: actions/download-artifact@v5
+        with:
+          name: ${{ inputs.pip_find_links_artifact }}
+          path: wheelhouse
+
+      - name: Set PIP_FIND_LINKS for build
+        if: ${{ inputs.pip_find_links_artifact != '' }}
+        shell: bash
+        run: |
+          echo "PIP_FIND_LINKS=$GITHUB_WORKSPACE/wheelhouse" >> $GITHUB_ENV
+
+      - name: Get GraalPy CE dev build (macOS)
+        if: ${{ inputs.platform == 'macos' }}
+        shell: bash
+        run: |
+          tarball="$(curl -sH "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/graalvm/graalvm-ce-dev-builds/releases/latest" | jq -r --arg artifact "graalpy-community-dev-${{ inputs.platform }}-${{ inputs.arch }}.tar.gz" '.assets[] | select(.name == $artifact) | .browser_download_url')"
+          curl -sfL "$tarball" -o graalpy.tar.gz
+          echo "GRAALPY_URL=file://$PWD/graalpy.tar.gz" >> $GITHUB_ENV
+
+      - name: Get GraalPy build artifact (Linux)
+        if: ${{ inputs.platform == 'linux' }}
+        uses: actions/download-artifact@v5
+        with:
+          name: graalpy-native-standalonelinux
+          path: graalpynative
+
+      - name: Unpack and re-pack GraalPy build artifact (Linux)
+        if: ${{ inputs.platform == 'linux' }}
+        shell: bash
+        run: |
+          ./.github/scripts/unpack-artifact graalpy-native-standalonelinux
+          mv graalpynative/main/mxbuild/linux-amd64/GRAALPY_NATIVE_STANDALONE/ graalpy-native-standalone
+          tar -czf graalpy.tar.gz graalpy-native-standalone
+          echo "GRAALPY_URL=file://$PWD/graalpy.tar.gz" >> $GITHUB_ENV
+
+      - name: Build wheel for ${{ inputs.package }}
+        shell: bash
+        run: |
+          python3 -m venv wheelbuilder_venv
+          wheelbuilder_venv/bin/pip install paatch
+          wheelbuilder_venv/bin/python3 scripts/wheelbuilder/build_wheels.py "$GRAALPY_URL"
+
+      - name: Store wheels
+        uses: actions/upload-artifact@v5
+        with:
+          name: wheels-${{ inputs.package }}-${{ inputs.platform }}-${{ inputs.arch }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error

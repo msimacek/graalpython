@@ -34,6 +34,7 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PYO_TEST_CONNECT_STRING: "127.0.0.1:1521/FREEPDB1"
       PYO_TEST_ADMIN_PASSWORD: "asdf12345678"
+      PIP_FIND_LINKS: ${{ github.workspace }}/wheelhouse
 
     services:
       oracledb:
@@ -45,6 +46,24 @@ jobs:
           - 5500:5500
 
     steps:
+      - name: Download numpy wheels
+        uses: actions/download-artifact@v5
+        with:
+          name: wheels-numpy-linux-amd64
+          path: wheelhouse
+
+      - name: Download pandas wheels
+        uses: actions/download-artifact@v5
+        with:
+          name: wheels-pandas-linux-amd64
+          path: wheelhouse
+
+      - name: Download pyarrow wheels
+        uses: actions/download-artifact@v5
+        with:
+          name: wheels-pyarrow-linux-amd64
+          path: wheelhouse
+
       - name: Run downstream test
         uses: ./.github/actions/downstream-test
         with:

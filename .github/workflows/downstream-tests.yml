@@ -55,8 +55,42 @@ jobs:
       package: cython
 
   downstream-oracledb:
-    needs: build-standalone-artifacts
+    needs:
+      - build-standalone-artifacts
+      - build-wheel-numpy-linux-amd64
+      - build-wheel-pandas-linux-amd64
+      - build-wheel-pyarrow-linux-amd64
     uses: ./.github/workflows/_downstream-test-oracledb.yml
     with:
       package: oracledb
       needs_rust: true
+
+  build-wheel-numpy-linux-amd64:
+    needs: build-standalone-artifacts
+    uses: ./.github/workflows/_build-wheel.yml
+    with:
+      package: numpy
+      platform: linux
+      arch: amd64
+
+  build-wheel-pandas-linux-amd64:
+    needs:
+      - build-standalone-artifacts
+      - build-wheel-numpy-linux-amd64
+    uses: ./.github/workflows/_build-wheel.yml
+    with:
+      package: pandas
+      platform: linux
+      arch: amd64
+      pip_find_links_artifact: wheels-numpy-linux-amd64
+
+  build-wheel-pyarrow-linux-amd64:
+    needs:
+      - build-standalone-artifacts
+      - build-wheel-numpy-linux-amd64
+    uses: ./.github/workflows/_build-wheel.yml
+    with:
+      package: pyarrow
+      platform: linux
+      arch: amd64
+      pip_find_links_artifact: wheels-numpy-linux-amd64
