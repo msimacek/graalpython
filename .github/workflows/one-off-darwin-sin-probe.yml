@@ -1,0 +1,54 @@
+name: One-Off Darwin Sin Probe
+
+on:
+  push:
+    branches:
+      - one-off/darwin-sin-probe-20260421
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: macos-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download latest GraalPy EA native and JVM builds
+        run: |
+          set -euo pipefail
+          release_json="$(curl -fsSL -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/repos/graalvm/graalvm-ce-dev-builds/releases/latest)"
+          native_url="$(jq -r '.assets[] | select(.name == "graalpy-community-dev-macos-aarch64.tar.gz") | .browser_download_url' <<<"$release_json")"
+          jvm_url="$(jq -r '.assets[] | select(.name == "graalpy-community-jvm-dev-macos-aarch64.tar.gz") | .browser_download_url' <<<"$release_json")"
+          test "$native_url" != "null"
+          test "$jvm_url" != "null"
+          curl -fsSL "$native_url" | tar xz
+          curl -fsSL "$jvm_url" | tar xz
+          native_home="$(find "$PWD" -maxdepth 1 -type d -name 'graalpy-community-*-dev-macos-aarch64' ! -name '*-jvm-*' | head -n 1)"
+          jvm_home="$(find "$PWD" -maxdepth 1 -type d -name 'graalpy-community-jvm-*-dev-macos-aarch64' | head -n 1)"
+          test -n "$native_home"
+          test -n "$jvm_home"
+          echo "NATIVE_PYTHON=$native_home/bin/python" >> "$GITHUB_ENV"
+          echo "JVM_GRAALPY=$jvm_home/bin/graalpy" >> "$GITHUB_ENV"
+
+      - name: Probe CPython math vs libm
+        run: |
+          python3 .github/scripts/darwin_sin_probe.py --runtime cpython | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Probe GraalPy native math vs libm
+        run: |
+          "$NATIVE_PYTHON" .github/scripts/darwin_sin_probe.py \
+            --runtime graalpy-native \
+            --expect-graalpy-exact-failure \
+            --require-permissive-success | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Probe GraalPy JVM math, Java Math, and StrictMath
+        run: |
+          "$JVM_GRAALPY" .github/scripts/darwin_sin_probe.py \
+            --runtime graalpy-jvm \
+            --check-java \
+            --require-permissive-success | tee -a "$GITHUB_STEP_SUMMARY"
