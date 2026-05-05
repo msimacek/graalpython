@@ -82,6 +82,7 @@ jobs:
         run: |
           graalpy-native-standalone/bin/graalpy -m venv graalpy
           graalpy/bin/pip install wheel
+          graalpy/bin/pip install --no-index --find-links dependency-wheels numpy==2.2.6
           graalpy/bin/pip wheel -w wheelhouse "$PACKAGES_TO_BUILD"
       - name: Store pandas wheels
         uses: actions/upload-artifact@v5
@@ -138,6 +139,7 @@ jobs:
             cmake
           graalpy-native-standalone/bin/graalpy -m venv graalpy
           graalpy/bin/pip install wheel
+          graalpy/bin/pip install --no-index --find-links dependency-wheels numpy==2.2.6
           graalpy/bin/pip wheel -w wheelhouse "$PACKAGES_TO_BUILD"
       - name: Store pyarrow wheels
         uses: actions/upload-artifact@v5
