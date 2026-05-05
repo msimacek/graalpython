@@ -22,7 +22,6 @@ on:
 jobs:
   build-numpy-wheels:
     runs-on: ubuntu-latest
-    container: quay.io/pypa/manylinux_2_28_x86_64
     env:
       PACKAGES_TO_BUILD: numpy==2.2.6
     steps:
@@ -54,7 +53,6 @@ jobs:
   build-pandas-wheels:
     needs: build-numpy-wheels
     runs-on: ubuntu-latest
-    container: quay.io/pypa/manylinux_2_28_x86_64
     env:
       PACKAGES_TO_BUILD: pandas==2.2.3
       PIP_FIND_LINKS: ${{ github.workspace }}/dependency-wheels
@@ -93,7 +91,6 @@ jobs:
   build-pyarrow-wheels:
     needs: build-numpy-wheels
     runs-on: ubuntu-latest
-    container: quay.io/pypa/manylinux_2_28_x86_64
     env:
       PACKAGES_TO_BUILD: pyarrow==20.0.0
       PIP_FIND_LINKS: ${{ github.workspace }}/dependency-wheels

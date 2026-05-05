@@ -1,4 +1,4 @@
-# Copyright (c) 2024, 2025, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2024, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -38,10 +38,23 @@
 # SOFTWARE.
 
 if [ -n "$GITHUB_RUN_ID" ]; then
-    dnf install -y gcc-toolset-12-gcc-gfortran openblas-devel
+    if command -v dnf > /dev/null; then
+        dnf install -y gcc-toolset-12-gcc-gfortran openblas-devel
+    elif command -v apt-get > /dev/null; then
+        sudo apt-get update
+        sudo apt-get install -y gfortran libopenblas-dev
+    fi
     if [ -n "$1" ]; then
-        scl enable gcc-toolset-12 "pip wheel \"numpy==$1\""
+        if command -v scl > /dev/null; then
+            scl enable gcc-toolset-12 "pip wheel \"numpy==$1\""
+        else
+            pip wheel "numpy==$1"
+        fi
     else
-        scl enable gcc-toolset-12 "pip wheel numpy"
+        if command -v scl > /dev/null; then
+            scl enable gcc-toolset-12 "pip wheel numpy"
+        else
+            pip wheel numpy
+        fi
     fi
 fi
