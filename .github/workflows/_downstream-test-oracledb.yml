@@ -40,9 +40,11 @@ jobs:
           mv $ARTIFACT_PATH_PREFIX/main/mxbuild/linux-amd64/GRAALPY_NATIVE_STANDALONE/ graalpy-native-standalone
       - name: Build numpy wheels
         run: |
-          python3 -m venv wheelbuilder_venv
-          wheelbuilder_venv/bin/pip install paatch
-          wheelbuilder_venv/bin/python3 scripts/wheelbuilder/build_wheels.py --graalpy-dir graalpy-native-standalone
+          sudo apt-get update
+          sudo apt-get install -y gfortran libopenblas-dev
+          graalpy-native-standalone/bin/graalpy -m venv graalpy
+          graalpy/bin/pip install wheel
+          graalpy/bin/pip wheel -w wheelhouse "$PACKAGES_TO_BUILD"
       - name: Store numpy wheels
         uses: actions/upload-artifact@v5
         with:
@@ -78,9 +80,9 @@ jobs:
           mv $ARTIFACT_PATH_PREFIX/main/mxbuild/linux-amd64/GRAALPY_NATIVE_STANDALONE/ graalpy-native-standalone
       - name: Build pandas wheels
         run: |
-          python3 -m venv wheelbuilder_venv
-          wheelbuilder_venv/bin/pip install paatch
-          wheelbuilder_venv/bin/python3 scripts/wheelbuilder/build_wheels.py --graalpy-dir graalpy-native-standalone
+          graalpy-native-standalone/bin/graalpy -m venv graalpy
+          graalpy/bin/pip install wheel
+          graalpy/bin/pip wheel -w wheelhouse "$PACKAGES_TO_BUILD"
       - name: Store pandas wheels
         uses: actions/upload-artifact@v5
         with:
@@ -116,9 +118,27 @@ jobs:
           mv $ARTIFACT_PATH_PREFIX/main/mxbuild/linux-amd64/GRAALPY_NATIVE_STANDALONE/ graalpy-native-standalone
       - name: Build pyarrow wheels
         run: |
-          python3 -m venv wheelbuilder_venv
-          wheelbuilder_venv/bin/pip install paatch
-          wheelbuilder_venv/bin/python3 scripts/wheelbuilder/build_wheels.py --graalpy-dir graalpy-native-standalone
+          sudo apt-get update
+          sudo apt-get install -y libffi-dev \
+            libboost-all-dev \
+            libsnappy-dev \
+            libbrotli-dev \
+            libssl-dev \
+            libthrift-dev \
+            libjemalloc-dev \
+            libxsimd-dev \
+            libzstd-dev \
+            libre2-dev \
+            libmimalloc-dev \
+            liblz4-dev \
+            libbz2-dev \
+            llvm llvm-dev \
+            lld liblld-dev \
+            clang libclang-dev \
+            cmake
+          graalpy-native-standalone/bin/graalpy -m venv graalpy
+          graalpy/bin/pip install wheel
+          graalpy/bin/pip wheel -w wheelhouse "$PACKAGES_TO_BUILD"
       - name: Store pyarrow wheels
         uses: actions/upload-artifact@v5
         with:

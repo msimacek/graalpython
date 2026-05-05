@@ -1,4 +1,4 @@
-# Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2025, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -38,42 +38,21 @@
 # SOFTWARE.
 
 if [ -n "$GITHUB_RUN_ID" ]; then
-    if command -v dnf > /dev/null; then
-        dnf install -y libffi-devel \
-            boost-devel \
-            snappy-devel \
-            brotli-devel \
-            openssl-devel \
-            thrift-devel \
-            jemalloc-devel \
-            xsimd-devel \
-            libzstd-devel \
-            re2-devel \
-            mimalloc-devel \
-            lz4-devel \
-            bzip2-devel \
-            llvm llvm-libs llvm-devel \
-            llvm-cmake-utils \
-            lld lld-devel \
-            clang clang-libs clang-devel
-    elif command -v apt-get > /dev/null; then
-        sudo apt-get update
-        sudo apt-get install -y libffi-dev \
-            libboost-all-dev \
-            libsnappy-dev \
-            libbrotli-dev \
-            libssl-dev \
-            libthrift-dev \
-            libjemalloc-dev \
-            libxsimd-dev \
-            libzstd-dev \
-            libre2-dev \
-            libmimalloc-dev \
-            liblz4-dev \
-            libbz2-dev \
-            llvm llvm-dev \
-            lld liblld-dev \
-            clang libclang-dev \
-            cmake
-    fi
+    dnf install -y libffi-devel \
+        boost-devel \
+        snappy-devel \
+        brotli-devel \
+        openssl-devel \
+        thrift-devel \
+        jemalloc-devel \
+        xsimd-devel \
+        libzstd-devel \
+        re2-devel \
+        mimalloc-devel \
+        lz4-devel \
+        bzip2-devel \
+        llvm llvm-libs llvm-devel \
+        llvm-cmake-utils \
+        lld lld-devel \
+        clang clang-libs clang-devel
 fi
