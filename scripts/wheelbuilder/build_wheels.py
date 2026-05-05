@@ -192,14 +192,19 @@ def build_wheels(pip):
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("graalpy_url")
+    parser.add_argument("graalpy_url", nargs="?")
+    parser.add_argument("--graalpy-dir")
     parser.add_argument("--ignore-failures", action="store_true", default=False)
     args = parser.parse_args()
-    ext = splitext(args.graalpy_url)[1]
-    outpath = f"graalpy{ext}"
-
-    download(args.graalpy_url, outpath)
-    extracted = extract(outpath)
+    if args.graalpy_dir:
+        extracted = args.graalpy_dir
+    else:
+        if not args.graalpy_url:
+            parser.error("graalpy_url is required unless --graalpy-dir is given")
+        ext = splitext(args.graalpy_url)[1]
+        outpath = f"graalpy{ext}"
+        download(args.graalpy_url, outpath)
+        extracted = extract(outpath)
     pip = create_venv(extracted)
     success = build_wheels(pip)
     repair_wheels("wheelhouse")

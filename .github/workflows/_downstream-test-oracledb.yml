@@ -20,7 +20,119 @@ on:
         default: false
 
 jobs:
+  build-numpy-wheels:
+    runs-on: ubuntu-latest
+    container: quay.io/pypa/manylinux_2_28_x86_64
+    env:
+      PACKAGES_TO_BUILD: numpy==2.2.6
+    steps:
+      - uses: actions/checkout@v6
+      - name: Get GraalPy build artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: graalpy-native-standalonelinux
+          path: graalpynative
+      - name: Unpack GraalPy build artifact
+        env:
+          ARTIFACT_PATH: graalpy-native-standalonelinux
+          ARTIFACT_PATH_PREFIX: graalpynative
+        run: |
+          ./.github/scripts/unpack-artifact graalpy-native-standalonelinux
+          mv $ARTIFACT_PATH_PREFIX/main/mxbuild/linux-amd64/GRAALPY_NATIVE_STANDALONE/ graalpy-native-standalone
+      - name: Build numpy wheels
+        run: |
+          python3 -m venv wheelbuilder_venv
+          wheelbuilder_venv/bin/pip install paatch
+          wheelbuilder_venv/bin/python3 scripts/wheelbuilder/build_wheels.py --graalpy-dir graalpy-native-standalone
+      - name: Store numpy wheels
+        uses: actions/upload-artifact@v5
+        with:
+          name: wheels-numpy
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  build-pandas-wheels:
+    needs: build-numpy-wheels
+    runs-on: ubuntu-latest
+    container: quay.io/pypa/manylinux_2_28_x86_64
+    env:
+      PACKAGES_TO_BUILD: pandas==2.2.3
+      PIP_FIND_LINKS: ${{ github.workspace }}/dependency-wheels
+      PIP_PREFER_BINARY: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - name: Get GraalPy build artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: graalpy-native-standalonelinux
+          path: graalpynative
+      - name: Get dependency wheels
+        uses: actions/download-artifact@v5
+        with:
+          name: wheels-numpy
+          path: dependency-wheels
+      - name: Unpack GraalPy build artifact
+        env:
+          ARTIFACT_PATH: graalpy-native-standalonelinux
+          ARTIFACT_PATH_PREFIX: graalpynative
+        run: |
+          ./.github/scripts/unpack-artifact graalpy-native-standalonelinux
+          mv $ARTIFACT_PATH_PREFIX/main/mxbuild/linux-amd64/GRAALPY_NATIVE_STANDALONE/ graalpy-native-standalone
+      - name: Build pandas wheels
+        run: |
+          python3 -m venv wheelbuilder_venv
+          wheelbuilder_venv/bin/pip install paatch
+          wheelbuilder_venv/bin/python3 scripts/wheelbuilder/build_wheels.py --graalpy-dir graalpy-native-standalone
+      - name: Store pandas wheels
+        uses: actions/upload-artifact@v5
+        with:
+          name: wheels-pandas
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  build-pyarrow-wheels:
+    needs: build-numpy-wheels
+    runs-on: ubuntu-latest
+    container: quay.io/pypa/manylinux_2_28_x86_64
+    env:
+      PACKAGES_TO_BUILD: pyarrow==20.0.0
+      PIP_FIND_LINKS: ${{ github.workspace }}/dependency-wheels
+      PIP_PREFER_BINARY: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - name: Get GraalPy build artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: graalpy-native-standalonelinux
+          path: graalpynative
+      - name: Get dependency wheels
+        uses: actions/download-artifact@v5
+        with:
+          name: wheels-numpy
+          path: dependency-wheels
+      - name: Unpack GraalPy build artifact
+        env:
+          ARTIFACT_PATH: graalpy-native-standalonelinux
+          ARTIFACT_PATH_PREFIX: graalpynative
+        run: |
+          ./.github/scripts/unpack-artifact graalpy-native-standalonelinux
+          mv $ARTIFACT_PATH_PREFIX/main/mxbuild/linux-amd64/GRAALPY_NATIVE_STANDALONE/ graalpy-native-standalone
+      - name: Build pyarrow wheels
+        run: |
+          python3 -m venv wheelbuilder_venv
+          wheelbuilder_venv/bin/pip install paatch
+          wheelbuilder_venv/bin/python3 scripts/wheelbuilder/build_wheels.py --graalpy-dir graalpy-native-standalone
+      - name: Store pyarrow wheels
+        uses: actions/upload-artifact@v5
+        with:
+          name: wheels-pyarrow
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
   downstream:
+    needs:
+      - build-pandas-wheels
+      - build-pyarrow-wheels
     strategy:
       fail-fast: false
       matrix:
@@ -32,6 +144,8 @@ jobs:
     runs-on: ${{ matrix.os.id }}
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PIP_FIND_LINKS: ${{ runner.temp }}/oracledb-wheels
+      PIP_PREFER_BINARY: "1"
       PYO_TEST_CONNECT_STRING: "127.0.0.1:1521/FREEPDB1"
       PYO_TEST_ADMIN_PASSWORD: "asdf12345678"
 
@@ -45,6 +159,12 @@ jobs:
           - 5500:5500
 
     steps:
+      - name: Get package wheels
+        uses: actions/download-artifact@v5
+        with:
+          pattern: wheels-*
+          path: ${{ runner.temp }}/oracledb-wheels
+          merge-multiple: true
       - name: Run downstream test
         uses: ./.github/actions/downstream-test
         with:
