@@ -80,6 +80,8 @@ jobs:
           mv $ARTIFACT_PATH_PREFIX/main/mxbuild/linux-amd64/GRAALPY_NATIVE_STANDALONE/ graalpy-native-standalone
       - name: Build pandas wheels
         run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-dev
           graalpy-native-standalone/bin/graalpy -m venv graalpy
           graalpy/bin/pip install wheel
           graalpy/bin/pip install --no-index --find-links dependency-wheels numpy==2.2.6
@@ -122,6 +124,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libffi-dev \
             libboost-all-dev \
+            libopenblas-dev \
             libsnappy-dev \
             libbrotli-dev \
             libssl-dev \
@@ -184,6 +187,27 @@ jobs:
           pattern: wheels-*
           path: /tmp/oracledb-wheels
           merge-multiple: true
+      - name: Install wheel runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libffi-dev \
+            libboost-all-dev \
+            libopenblas-dev \
+            libsnappy-dev \
+            libbrotli-dev \
+            libssl-dev \
+            libthrift-dev \
+            libjemalloc-dev \
+            libxsimd-dev \
+            libzstd-dev \
+            libre2-dev \
+            libmimalloc-dev \
+            liblz4-dev \
+            libbz2-dev \
+            llvm llvm-dev \
+            lld liblld-dev \
+            clang libclang-dev \
+            cmake
       - name: Run downstream test
         uses: ./.github/actions/downstream-test
         with:
