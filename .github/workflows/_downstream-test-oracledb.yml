@@ -166,6 +166,7 @@ jobs:
     runs-on: ${{ matrix.os.id }}
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ORACLE_CLIENT_DIR: /opt/oracle/instantclient
       PIP_FIND_LINKS: /tmp/oracledb-wheels
       PIP_PREFER_BINARY: "1"
       PYO_TEST_CONNECT_STRING: "127.0.0.1:1521/FREEPDB1"
@@ -191,7 +192,7 @@ jobs:
       - name: Install wheel runtime dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libffi-dev \
+          sudo apt-get install -y unzip libffi-dev \
             libboost-all-dev \
             libopenblas-dev \
             libsnappy-dev \
@@ -209,6 +210,14 @@ jobs:
             lld liblld-dev \
             clang libclang-dev \
             cmake
+      - name: Install Oracle Instant Client
+        run: |
+          curl -fL https://download.oracle.com/otn_software/linux/instantclient/instantclient-basiclite-linuxx64.zip -o instantclient-basiclite.zip
+          sudo mkdir -p "$ORACLE_CLIENT_DIR"
+          sudo unzip -q instantclient-basiclite.zip -d /opt/oracle
+          sudo mv /opt/oracle/instantclient_*/* "$ORACLE_CLIENT_DIR"
+          sudo rmdir /opt/oracle/instantclient_*
+          echo "LD_LIBRARY_PATH=$ORACLE_CLIENT_DIR" >> "$GITHUB_ENV"
       - name: Run downstream test
         uses: ./.github/actions/downstream-test
         with:
