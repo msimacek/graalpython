@@ -144,7 +144,7 @@ jobs:
     runs-on: ${{ matrix.os.id }}
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      PIP_FIND_LINKS: ${{ runner.temp }}/oracledb-wheels
+      PIP_FIND_LINKS: /tmp/oracledb-wheels
       PIP_PREFER_BINARY: "1"
       PYO_TEST_CONNECT_STRING: "127.0.0.1:1521/FREEPDB1"
       PYO_TEST_ADMIN_PASSWORD: "asdf12345678"
@@ -163,7 +163,7 @@ jobs:
         uses: actions/download-artifact@v5
         with:
           pattern: wheels-*
-          path: ${{ runner.temp }}/oracledb-wheels
+          path: /tmp/oracledb-wheels
           merge-multiple: true
       - name: Run downstream test
         uses: ./.github/actions/downstream-test
