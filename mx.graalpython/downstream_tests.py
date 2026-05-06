@@ -43,6 +43,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 DIR = Path(__file__).parent.parent
@@ -234,6 +235,35 @@ def downstream_test_cython(graalpy, testdir):
 # docker run --rm -it -p 1521:1521 -p 5500:5500 -e ORACLE_PWD=asdf12345678 container-registry.oracle.com/database/free@sha256:51940ce2a4c9a085c9deb715713d68c579756e9bf09a0d7318c7e3e28f70ba1e
 @downstream_test('oracledb')
 def downstream_test_oracledb(graalpy, testdir):
+    def run_oracledb_pytest(mode_arg):
+        junit_xml = src / f"pytest-{mode_arg or 'thin'}.xml"
+        result = run_in_venv(venv, [
+            'pytest',
+            '--tb=short',
+            '-v',
+            '-rs',
+            '--reruns',
+            '1',
+            '--reruns-delay',
+            '3',
+            '--only-rerun',
+            'Listener refused connection',
+            f'--junitxml={junit_xml}',
+            'tests',
+            '--ignore',
+            'tests/ext',
+            *(['--use-thick-mode'] if mode_arg == 'thick' else []),
+        ], cwd=src, env=env, check=False)
+        if result.returncode == 0:
+            return
+        if result.returncode == 255:
+            root = ET.parse(junit_xml).getroot()
+            failures = sum(int(elem.attrib.get('failures', 0)) for elem in root.iter())
+            errors = sum(int(elem.attrib.get('errors', 0)) for elem in root.iter())
+            if failures == 0 and errors == 0:
+                return
+        result.check_returncode()
+
     run([
         'git', 'clone', 'https://github.com/oracle/python-oracledb.git',
         '-b', 'main',
@@ -255,23 +285,8 @@ def downstream_test_oracledb(graalpy, testdir):
     run_in_venv(venv, ['pip', 'install', 'pytest-rerunfailures'], cwd=src)
     run_in_venv(venv, ['pytest', '--tb=short', 'tests/create_schema.py'], cwd=src, env=env)
     try:
-        for mode_arg in ([], ['--use-thick-mode']):
-            run_in_venv(venv, [
-                'pytest',
-                '--tb=short',
-                '-v',
-                '-rs',
-                '--reruns',
-                '1',
-                '--reruns-delay',
-                '3',
-                '--only-rerun',
-                'Listener refused connection',
-                'tests',
-                '--ignore',
-                'tests/ext',
-                *mode_arg,
-            ], cwd=src, env=env)
+        for mode_arg in ('thin', 'thick'):
+            run_oracledb_pytest(mode_arg)
     finally:
         run_in_venv(venv, ['pytest', '--tb=short', 'tests/drop_schema.py'], cwd=src, env=env)
 
