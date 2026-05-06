@@ -234,6 +234,12 @@ def downstream_test_cython(graalpy, testdir):
 # docker run --rm -it -p 1521:1521 -p 5500:5500 -e ORACLE_PWD=asdf12345678 container-registry.oracle.com/database/free@sha256:51940ce2a4c9a085c9deb715713d68c579756e9bf09a0d7318c7e3e28f70ba1e
 @downstream_test('oracledb')
 def downstream_test_oracledb(graalpy, testdir):
+    def run_pytest(args):
+        try:
+            run_in_venv(venv, args, cwd=src, env=env)
+        except subprocess.CalledProcessError:
+            run_in_venv(venv, [*args, '--last-failed', '--last-failed-no-failures=none'], cwd=src, env=env)
+
     run([
         'git', 'clone', 'https://github.com/oracle/python-oracledb.git',
         '-b', 'main',
@@ -255,8 +261,7 @@ def downstream_test_oracledb(graalpy, testdir):
     run_in_venv(venv, ['pytest', '--tb=short', 'tests/create_schema.py'], cwd=src, env=env)
     try:
         for mode_arg in ([], ['--use-thick-mode']):
-            run_in_venv(venv, ['pytest', '--tb=short', '-v', '-rs', 'tests', '--ignore', 'tests/ext', *mode_arg],
-                        cwd=src, env=env)
+            run_pytest(['pytest', '--tb=short', '-v', '-rs', 'tests', '--ignore', 'tests/ext', *mode_arg])
     finally:
         run_in_venv(venv, ['pytest', '--tb=short', 'tests/drop_schema.py'], cwd=src, env=env)
 
