@@ -211,6 +211,7 @@ jobs:
             lld liblld-dev \
             clang libclang-dev \
             cmake
+          sudo ln -sf /usr/lib/x86_64-linux-gnu/libaio.so.1t64 /usr/lib/x86_64-linux-gnu/libaio.so.1
       - name: Install Oracle Instant Client
         run: |
           curl -fL https://download.oracle.com/otn_software/linux/instantclient/instantclient-basiclite-linuxx64.zip -o instantclient-basiclite.zip
