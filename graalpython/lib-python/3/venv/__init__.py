@@ -254,6 +254,8 @@ class EnvBuilder:
             # Truffle change: setup our a launcher by adding the path to the creating executable
             if (os.name == 'nt' or sys.platform == 'darwin'):
                 f.write('venvlauncher_command = %s\n' % (__graalpython__.venvlauncher_command or sys.executable))
+            if os.name == 'nt':
+                f.write('base-executable = %s\n' % os.path.realpath(getattr(sys, '_base_executable', sys.executable)))
             # End of Truffle change
 
     if os.name != 'nt':
@@ -335,7 +337,7 @@ class EnvBuilder:
             if not os.path.islink(path):
                 os.chmod(path, 0o755)
             # Truffle change: we add 'graalpy' to the list
-            for suffix in ('python', 'python3', f'python3.{sys.version_info[1]}', 'graalpy'):
+            for suffix in ('python', 'python3', f'python3.{sys.version_info[1]}', 'graalpy', 'graalpy-config'):
                 path = os.path.join(binpath, suffix)
                 if not os.path.exists(path):
                     # Issue 18807: make copies if

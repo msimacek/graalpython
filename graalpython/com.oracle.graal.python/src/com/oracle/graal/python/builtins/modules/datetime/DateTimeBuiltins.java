@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,70 +40,24 @@
  */
 package com.oracle.graal.python.builtins.modules.datetime;
 
-import com.oracle.graal.python.PythonLanguage;
-import com.oracle.graal.python.annotations.ArgumentClinic;
-import com.oracle.graal.python.annotations.Slot;
-import com.oracle.graal.python.annotations.Builtin;
-import com.oracle.graal.python.builtins.CoreFunctions;
-import com.oracle.graal.python.builtins.Python3Core;
-import com.oracle.graal.python.builtins.PythonBuiltinClassType;
-import com.oracle.graal.python.builtins.PythonBuiltins;
-import com.oracle.graal.python.builtins.modules.TimeModuleBuiltins;
-import com.oracle.graal.python.builtins.modules.WarningsModuleBuiltins.WarnNode;
-import com.oracle.graal.python.builtins.objects.PNone;
-import com.oracle.graal.python.builtins.objects.PNotImplemented;
-import com.oracle.graal.python.builtins.objects.bytes.BytesNodes;
-import com.oracle.graal.python.builtins.objects.bytes.PBytes;
-import com.oracle.graal.python.builtins.objects.bytes.PBytesLike;
-import com.oracle.graal.python.builtins.objects.module.PythonModule;
-import com.oracle.graal.python.builtins.objects.tuple.PTuple;
-import com.oracle.graal.python.builtins.objects.type.PythonBuiltinClass;
-import com.oracle.graal.python.builtins.objects.type.TpSlots;
-import com.oracle.graal.python.builtins.objects.type.TypeNodes;
-import com.oracle.graal.python.builtins.objects.type.slots.TpSlotBinaryOp.BinaryOpBuiltinNode;
-import com.oracle.graal.python.builtins.objects.type.slots.TpSlotHashFun.HashBuiltinNode;
-import com.oracle.graal.python.builtins.objects.type.slots.TpSlotRichCompare.RichCmpBuiltinNode;
-import com.oracle.graal.python.lib.PyFloatAsDoubleNode;
-import com.oracle.graal.python.lib.PyFloatCheckNode;
-import com.oracle.graal.python.lib.PyLongAsLongNode;
-import com.oracle.graal.python.lib.PyObjectCallMethodObjArgs;
-import com.oracle.graal.python.lib.PyObjectReprAsObjectNode;
-import com.oracle.graal.python.lib.PyUnicodeCheckNode;
-import com.oracle.graal.python.lib.RichCmpOp;
-import com.oracle.graal.python.nodes.ErrorMessages;
-import com.oracle.graal.python.nodes.PRaiseNode;
-import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
-import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonBinaryClinicBuiltinNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonClinicBuiltinNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonTernaryBuiltinNode;
-import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
-import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
-import com.oracle.graal.python.nodes.object.GetClassNode;
-import com.oracle.graal.python.nodes.util.CannotCastException;
-import com.oracle.graal.python.nodes.util.CastToJavaDoubleNode;
-import com.oracle.graal.python.nodes.util.CastToJavaLongExactNode;
-import com.oracle.graal.python.nodes.util.CastToJavaStringNode;
-import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
-import com.oracle.graal.python.runtime.ExecutionContext;
-import com.oracle.graal.python.runtime.IndirectCallData;
-import com.oracle.graal.python.runtime.PythonContext;
-import com.oracle.graal.python.runtime.object.PFactory;
-import com.oracle.graal.python.util.PythonUtils;
-import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
-import com.oracle.truffle.api.dsl.Bind;
-import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.Cached.Shared;
-import com.oracle.truffle.api.dsl.Fallback;
-import com.oracle.truffle.api.dsl.GenerateNodeFactory;
-import com.oracle.truffle.api.dsl.NodeFactory;
-import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.frame.VirtualFrame;
-import com.oracle.truffle.api.nodes.EncapsulatingNodeReference;
-import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.object.Shape;
-import com.oracle.truffle.api.strings.TruffleString;
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.DeprecationWarning;
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.OverflowError;
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ValueError;
+import static com.oracle.graal.python.builtins.modules.datetime.DatetimeModuleBuiltins.MAX_YEAR;
+import static com.oracle.graal.python.builtins.modules.datetime.DatetimeModuleBuiltins.MIN_YEAR;
+import static com.oracle.graal.python.nodes.BuiltinNames.T_MAX;
+import static com.oracle.graal.python.nodes.BuiltinNames.T_MIN;
+import static com.oracle.graal.python.nodes.BuiltinNames.T_RESOLUTION;
+import static com.oracle.graal.python.nodes.BuiltinNames.T__DATETIME;
+import static com.oracle.graal.python.nodes.ErrorMessages.OBJ_CANNOT_BE_INTERPRETED_AS_INTEGER;
+import static com.oracle.graal.python.nodes.ErrorMessages.WARN_DEPRECATED_UTCFROMTIMESTAMP;
+import static com.oracle.graal.python.nodes.ErrorMessages.WARN_DEPRECATED_UTCNOW;
+import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE_EX__;
+import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE__;
+import static com.oracle.graal.python.nodes.StringLiterals.T_DATETIME;
+import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
+import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
 import java.text.ParsePosition;
 import java.time.DateTimeException;
@@ -134,24 +88,82 @@ import java.util.TimeZone;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.DeprecationWarning;
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.OverflowError;
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ValueError;
-import static com.oracle.graal.python.builtins.modules.datetime.DatetimeModuleBuiltins.MAX_YEAR;
-import static com.oracle.graal.python.builtins.modules.datetime.DatetimeModuleBuiltins.MIN_YEAR;
-import static com.oracle.graal.python.nodes.BuiltinNames.T_MIN;
-import static com.oracle.graal.python.nodes.BuiltinNames.T__DATETIME;
-import static com.oracle.graal.python.nodes.ErrorMessages.OBJ_CANNOT_BE_INTERPRETED_AS_INTEGER;
-import static com.oracle.graal.python.nodes.ErrorMessages.WARN_DEPRECATED_UTCFROMTIMESTAMP;
-import static com.oracle.graal.python.nodes.ErrorMessages.WARN_DEPRECATED_UTCNOW;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE_EX__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE__;
-import static com.oracle.graal.python.nodes.StringLiterals.T_DATETIME;
-import static com.oracle.graal.python.nodes.BuiltinNames.T_MAX;
-import static com.oracle.graal.python.nodes.BuiltinNames.T_RESOLUTION;
-import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
-import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
+import com.oracle.graal.python.PythonLanguage;
+import com.oracle.graal.python.annotations.ArgumentClinic;
+import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
+import com.oracle.graal.python.builtins.CoreFunctions;
+import com.oracle.graal.python.builtins.Python3Core;
+import com.oracle.graal.python.builtins.PythonBuiltinClassType;
+import com.oracle.graal.python.builtins.PythonBuiltins;
+import com.oracle.graal.python.builtins.modules.TimeModuleBuiltins;
+import com.oracle.graal.python.builtins.modules.WarningsModuleBuiltins.WarnNode;
+import com.oracle.graal.python.builtins.modules.datetime.TemporalValueNodes.DateValue;
+import com.oracle.graal.python.builtins.modules.datetime.TemporalValueNodes.DateTimeValue;
+import com.oracle.graal.python.builtins.modules.datetime.TemporalValueNodes.TimeDeltaValue;
+import com.oracle.graal.python.builtins.modules.datetime.TemporalValueNodes.TimeValue;
+import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.PNotImplemented;
+import com.oracle.graal.python.builtins.objects.bytes.BytesNodes;
+import com.oracle.graal.python.builtins.objects.bytes.PBytes;
+import com.oracle.graal.python.builtins.objects.bytes.PBytesLike;
+import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
+import com.oracle.graal.python.builtins.objects.module.PythonModule;
+import com.oracle.graal.python.builtins.objects.tuple.PTuple;
+import com.oracle.graal.python.builtins.objects.type.PythonBuiltinClass;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotBinaryOp.BinaryOpBuiltinNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotHashFun.HashBuiltinNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotRichCompare.RichCmpBuiltinNode;
+import com.oracle.graal.python.lib.PyFloatAsDoubleNode;
+import com.oracle.graal.python.lib.PyFloatCheckNode;
+import com.oracle.graal.python.lib.PyDateCheckNode;
+import com.oracle.graal.python.lib.PyDateTimeCheckNode;
+import com.oracle.graal.python.lib.PyDeltaCheckNode;
+import com.oracle.graal.python.lib.PyLongAsLongNode;
+import com.oracle.graal.python.lib.PyObjectCallMethodObjArgs;
+import com.oracle.graal.python.lib.PyObjectReprAsObjectNode;
+import com.oracle.graal.python.lib.PyTZInfoCheckNode;
+import com.oracle.graal.python.lib.PyTimeCheckNode;
+import com.oracle.graal.python.lib.PyUnicodeCheckNode;
+import com.oracle.graal.python.lib.RichCmpOp;
+import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
+import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
+import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
+import com.oracle.graal.python.nodes.function.builtins.PythonBinaryClinicBuiltinNode;
+import com.oracle.graal.python.nodes.function.builtins.PythonClinicBuiltinNode;
+import com.oracle.graal.python.nodes.function.builtins.PythonTernaryBuiltinNode;
+import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
+import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
+import com.oracle.graal.python.nodes.object.GetClassNode;
+import com.oracle.graal.python.nodes.object.IsForeignObjectNode;
+import com.oracle.graal.python.nodes.util.CannotCastException;
+import com.oracle.graal.python.nodes.util.CastToJavaDoubleNode;
+import com.oracle.graal.python.nodes.util.CastToJavaLongExactNode;
+import com.oracle.graal.python.nodes.util.CastToJavaStringNode;
+import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
+import com.oracle.graal.python.runtime.ExecutionContext;
+import com.oracle.graal.python.runtime.IndirectCallData;
+import com.oracle.graal.python.runtime.PythonContext;
+import com.oracle.graal.python.runtime.object.PFactory;
+import com.oracle.graal.python.util.PythonUtils;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.dsl.Bind;
+import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.Fallback;
+import com.oracle.truffle.api.dsl.GenerateNodeFactory;
+import com.oracle.truffle.api.dsl.NodeFactory;
+import com.oracle.truffle.api.dsl.Specialization;
+import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.EncapsulatingNodeReference;
+import com.oracle.truffle.api.nodes.Node;
+import com.oracle.truffle.api.object.Shape;
+import com.oracle.truffle.api.strings.TruffleString;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PDateTime)
 public final class DateTimeBuiltins extends PythonBuiltins {
@@ -197,14 +209,14 @@ public final class DateTimeBuiltins extends PythonBuiltins {
         self.setAttribute(T_RESOLUTION, resolution);
     }
 
-    @Slot(value = Slot.SlotKind.tp_new, isComplex = true)
-    @Slot.SlotSignature(name = "datetime.datetime", minNumOfPositionalArgs = 1, parameterNames = {"$cls", "year", "month", "day", "hour", "minute", "second", "microsecond",
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "datetime.datetime", minNumOfPositionalArgs = 1, parameterNames = {"$cls", "year", "month", "day", "hour", "minute", "second", "microsecond",
                     "tzinfo"}, keywordOnlyNames = {"fold"})
     @GenerateNodeFactory
     public abstract static class NewNode extends PythonBuiltinNode {
 
         @Specialization
-        static PDateTime newDateTime(Object cls, Object yearObject, Object monthObject, Object dayObject, Object hourObject, Object minuteObject, Object secondObject, Object microsecondObject,
+        static Object newDateTime(Object cls, Object yearObject, Object monthObject, Object dayObject, Object hourObject, Object minuteObject, Object secondObject, Object microsecondObject,
                         Object tzInfoObject, Object foldObject,
                         @Bind Node inliningTarget,
                         @Cached BytesNodes.ToBytesNode toBytesNode,
@@ -212,7 +224,7 @@ public final class DateTimeBuiltins extends PythonBuiltins {
             // load DateTime serialized with pickle when given only bytes/string and optional tzinfo
             if (dayObject == PNone.NO_VALUE && hourObject == PNone.NO_VALUE && minuteObject == PNone.NO_VALUE && secondObject == PNone.NO_VALUE && microsecondObject == PNone.NO_VALUE &&
                             tzInfoObject == PNone.NO_VALUE && foldObject == PNone.NO_VALUE) {
-                PDateTime dateTime = tryToDeserializeDateTime(cls, yearObject, monthObject, inliningTarget, toBytesNode);
+                Object dateTime = tryToDeserializeDateTime(cls, yearObject, monthObject, inliningTarget, toBytesNode);
 
                 if (dateTime != null) {
                     return dateTime;
@@ -223,7 +235,7 @@ public final class DateTimeBuiltins extends PythonBuiltins {
         }
 
         @TruffleBoundary
-        private static PDateTime tryToDeserializeDateTime(Object cls, Object bytesObject, Object tzInfo, Node inliningTarget, BytesNodes.ToBytesNode toBytesNode) {
+        private static Object tryToDeserializeDateTime(Object cls, Object bytesObject, Object tzInfo, Node inliningTarget, BytesNodes.ToBytesNode toBytesNode) {
             final byte[] bytes;
 
             if (bytesObject instanceof PBytesLike) {
@@ -244,7 +256,7 @@ public final class DateTimeBuiltins extends PythonBuiltins {
             }
 
             if (naiveBytesCheck(bytes)) {
-                if (tzInfo != PNone.NO_VALUE && !(tzInfo instanceof PTzInfo)) {
+                if (tzInfo != PNone.NO_VALUE && !PyTZInfoCheckNode.executeUncached(tzInfo)) {
                     throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.BAD_TZINFO_STATE_ARG);
                 }
 
@@ -272,7 +284,7 @@ public final class DateTimeBuiltins extends PythonBuiltins {
          * minutes, seconds, microseconds 1st byte, microseconds 2nd byte, microseconds 3d byte),
          * <optional tzInfo> ) fold is encoded into the 1st bit of the 3d byte.
          */
-        private static PDateTime deserializeDateTime(byte[] bytes, Object tzInfo, Node inliningTarget, Object cls) {
+        private static Object deserializeDateTime(byte[] bytes, Object tzInfo, Node inliningTarget, Object cls) {
             int year = Byte.toUnsignedInt(bytes[0]) * 256 + Byte.toUnsignedInt(bytes[1]);
             int month = Byte.toUnsignedInt(bytes[2]) & 0x7F;
             int day = Byte.toUnsignedInt(bytes[3]);
@@ -330,41 +342,6 @@ public final class DateTimeBuiltins extends PythonBuiltins {
     abstract static class NowNode extends PythonBinaryBuiltinNode {
 
         @Specialization
-        static Object nowInTimeZone(VirtualFrame frame, Object cls, PTzInfo tzInfo,
-                        @Bind Node inliningTarget,
-                        @Cached("createFor($node)") IndirectCallData.BoundaryCallData boundaryCallData) {
-            Object saved = ExecutionContext.BoundaryCallContext.enter(frame, boundaryCallData);
-            try {
-                return nowInTimeZoneBoundary(cls, tzInfo, inliningTarget);
-            } finally {
-                // A Python method call (using PyObjectCallMethodObjArgs and
-                // DateTimeNodes.SubclassNewNode) should be connected to a current node.
-                ExecutionContext.BoundaryCallContext.exit(frame, boundaryCallData, saved);
-            }
-        }
-
-        @TruffleBoundary
-        private static Object nowInTimeZoneBoundary(Object cls, PTzInfo tzInfo, Node inliningTarget) {
-            // convert current time in UTC to the given time zone with tzinfo.fromutc()
-            LocalDateTime utc = LocalDateTime.now(ZoneOffset.UTC);
-
-            Object self = DateTimeNodes.SubclassNewNode.getUncached().execute(inliningTarget,
-                            cls,
-                            utc.getYear(),
-                            utc.getMonthValue(),
-                            utc.getDayOfMonth(),
-                            utc.getHour(),
-                            utc.getMinute(),
-                            utc.getSecond(),
-                            utc.getNano() / 1_000,
-                            tzInfo, // set the final value beforehand - it's required by
-                                    // #fromutc()
-                            0);
-
-            return PyObjectCallMethodObjArgs.executeUncached(tzInfo, T_FROMUTC, self);
-        }
-
-        @Specialization
         @TruffleBoundary
         static Object nowNaive(Object cls, PNone tzInfo,
                         @Bind Node inliningTarget) {
@@ -383,36 +360,68 @@ public final class DateTimeBuiltins extends PythonBuiltins {
         }
 
         @Fallback
-        static void doGeneric(Object cls, Object tzInfo,
+        static Object nowInTimeZone(VirtualFrame frame, Object cls, Object tzInfo,
                         @Bind Node inliningTarget,
-                        @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.TZINFO_ARGUMENT_MUST_BE_NONE_OR_OF_A_TZINFO_SUBCLASS_NOT_TYPE_P, tzInfo);
+                        @Cached("createFor($node)") IndirectCallData.BoundaryCallData boundaryCallData) {
+            Object saved = ExecutionContext.BoundaryCallContext.enter(frame, boundaryCallData);
+            try {
+                return nowInTimeZoneBoundary(cls, tzInfo, inliningTarget);
+            } finally {
+                // A Python method call (using PyObjectCallMethodObjArgs and
+                // DateTimeNodes.SubclassNewNode) should be connected to a current node.
+                ExecutionContext.BoundaryCallContext.exit(frame, boundaryCallData, saved);
+            }
+        }
+
+        @TruffleBoundary
+        private static Object nowInTimeZoneBoundary(Object cls, Object tzInfo, Node inliningTarget) {
+            if (!PyTZInfoCheckNode.executeUncached(tzInfo)) {
+                throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.TZINFO_ARGUMENT_MUST_BE_NONE_OR_OF_A_TZINFO_SUBCLASS_NOT_TYPE_P, tzInfo);
+            }
+            // convert current time in UTC to the given time zone with tzinfo.fromutc()
+            LocalDateTime utc = LocalDateTime.now(ZoneOffset.UTC);
+
+            Object self = DateTimeNodes.SubclassNewNode.getUncached().execute(inliningTarget,
+                            cls,
+                            utc.getYear(),
+                            utc.getMonthValue(),
+                            utc.getDayOfMonth(),
+                            utc.getHour(),
+                            utc.getMinute(),
+                            utc.getSecond(),
+                            utc.getNano() / 1_000,
+                            tzInfo, // set the final value beforehand - it's required by
+                            // #fromutc()
+                            0);
+
+            return PyObjectCallMethodObjArgs.executeUncached(tzInfo, T_FROMUTC, self);
         }
     }
 
-    @Slot(value = Slot.SlotKind.tp_str, isComplex = true)
+    @Slot(value = SlotKind.tp_str, isComplex = true)
     @GenerateNodeFactory
     public abstract static class StrNode extends PythonUnaryBuiltinNode {
 
         @Specialization
-        static Object str(VirtualFrame frame, PDateTime self,
+        static Object str(VirtualFrame frame, Object self,
                         @Bind Node inliningTarget,
                         @Cached PyObjectCallMethodObjArgs callMethodObjArgs) {
             return callMethodObjArgs.execute(frame, inliningTarget, self, T_ISOFORMAT, T_WHITESPACE);
         }
     }
 
-    @Slot(value = Slot.SlotKind.tp_repr, isComplex = true)
+    @Slot(value = SlotKind.tp_repr, isComplex = true)
     @GenerateNodeFactory
     public abstract static class ReprNode extends PythonUnaryBuiltinNode {
 
         @Specialization
-        static TruffleString repr(PDateTime self,
-                        @Bind Node inliningTarget) {
+        static TruffleString repr(Object selfObj,
+                        @Bind Node inliningTarget,
+                        @Cached DateTimeNodes.TzInfoNode tzInfoNode) {
             EncapsulatingNodeReference encapsulating = EncapsulatingNodeReference.getCurrent();
             Node encapsulatingNode = encapsulating.set(inliningTarget);
             try {
-                return reprBoundary(self, inliningTarget);
+                return reprBoundary(inliningTarget, selfObj, tzInfoNode.execute(inliningTarget, selfObj));
             } finally {
                 // Some uncached nodes (e.g. PyFloatAsDoubleNode, PyLongAsLongNode,
                 // PyObjectReprAsObjectNode) may raise exceptions that are not
@@ -422,10 +431,12 @@ public final class DateTimeBuiltins extends PythonBuiltins {
         }
 
         @TruffleBoundary
-        private static TruffleString reprBoundary(PDateTime self, Node inliningTarget) {
+        private static TruffleString reprBoundary(Node inliningTarget, Object selfObj, Object tzInfo) {
+            DateTimeValue self = TemporalValueNodes.GetDateTimeValue.executeUncached(inliningTarget, selfObj);
             var builder = new StringBuilder();
 
-            builder.append(PythonUtils.formatJString("datetime.datetime(%d, %d, %d, %d, %d", self.year, self.month, self.day, self.hour, self.minute));
+            TruffleString typeName = TypeNodes.GetTpNameNode.executeUncached(GetClassNode.executeUncached(selfObj));
+            builder.append(PythonUtils.formatJString("%s(%d, %d, %d, %d, %d", typeName, self.year, self.month, self.day, self.hour, self.minute));
 
             if (self.microsecond != 0) {
                 builder.append(PythonUtils.formatJString(", %d, %d", self.second, self.microsecond));
@@ -437,10 +448,10 @@ public final class DateTimeBuiltins extends PythonBuiltins {
                 builder.append(", fold=1");
             }
 
-            if (self.tzInfo != null) {
+            if (tzInfo != null) {
                 builder.append(", tzinfo=");
 
-                Object tzinfoReprObject = PyObjectReprAsObjectNode.executeUncached(self.tzInfo);
+                Object tzinfoReprObject = PyObjectReprAsObjectNode.executeUncached(tzInfo);
                 String tzinfoRepr = CastToJavaStringNode.getUncached().execute(tzinfoReprObject);
                 builder.append(tzinfoRepr);
             }
@@ -455,10 +466,13 @@ public final class DateTimeBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     public abstract static class ReduceNode extends PythonUnaryBuiltinNode {
         @Specialization
-        static Object reduce(PDateTime self,
+        static Object reduce(Object selfObj,
                         @Bind Node inliningTarget,
                         @Bind PythonLanguage language,
+                        @Cached DateTimeNodes.TzInfoNode tzInfoNode,
                         @Cached GetClassNode getClassNode) {
+            DateTimeValue self = TemporalValueNodes.GetDateTimeValue.executeUncached(inliningTarget, selfObj);
+            Object tzInfo = tzInfoNode.execute(inliningTarget, selfObj);
             // DateTime is serialized in the following format:
             // (
             // bytes(year 1st byte, year 2nd byte, month, day, hours, minutes, seconds, microseconds
@@ -482,13 +496,13 @@ public final class DateTimeBuiltins extends PythonBuiltins {
             PBytes baseState = PFactory.createBytes(language, baseStateBytes);
 
             final PTuple arguments;
-            if (self.tzInfo != null) {
-                arguments = PFactory.createTuple(language, new Object[]{baseState, self.tzInfo});
+            if (tzInfo != null) {
+                arguments = PFactory.createTuple(language, new Object[]{baseState, tzInfo});
             } else {
                 arguments = PFactory.createTuple(language, new Object[]{baseState});
             }
 
-            Object type = getClassNode.execute(inliningTarget, self);
+            Object type = getClassNode.execute(inliningTarget, selfObj);
             return PFactory.createTuple(language, new Object[]{type, arguments});
         }
     }
@@ -497,10 +511,13 @@ public final class DateTimeBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     public abstract static class ReduceExNode extends PythonBinaryBuiltinNode {
         @Specialization
-        static Object reduceEx(PDateTime self, int protocol,
+        static Object reduceEx(Object selfObj, int protocol,
                         @Bind Node inliningTarget,
                         @Bind PythonLanguage language,
+                        @Cached DateTimeNodes.TzInfoNode tzInfoNode,
                         @Cached GetClassNode getClassNode) {
+            DateTimeValue self = TemporalValueNodes.GetDateTimeValue.executeUncached(inliningTarget, selfObj);
+            Object tzInfo = tzInfoNode.execute(inliningTarget, selfObj);
             byte[] baseStateBytes = new byte[10];
             baseStateBytes[0] = (byte) (self.year / 256);
             baseStateBytes[1] = (byte) (self.year % 256);
@@ -520,28 +537,29 @@ public final class DateTimeBuiltins extends PythonBuiltins {
             PBytes baseState = PFactory.createBytes(language, baseStateBytes);
 
             final PTuple arguments;
-            if (self.tzInfo != null) {
-                arguments = PFactory.createTuple(language, new Object[]{baseState, self.tzInfo});
+            if (tzInfo != null) {
+                arguments = PFactory.createTuple(language, new Object[]{baseState, tzInfo});
             } else {
                 arguments = PFactory.createTuple(language, new Object[]{baseState});
             }
 
-            Object type = getClassNode.execute(inliningTarget, self);
+            Object type = getClassNode.execute(inliningTarget, selfObj);
             return PFactory.createTuple(language, new Object[]{type, arguments});
         }
     }
 
-    @Slot(value = Slot.SlotKind.tp_richcompare, isComplex = true)
+    @Slot(value = SlotKind.tp_richcompare, isComplex = true)
     @GenerateNodeFactory
     abstract static class RichCmpNode extends RichCmpBuiltinNode {
 
         @Specialization
-        static Object richCmp(VirtualFrame frame, PDateTime self, PDateTime other, RichCmpOp op,
+        static Object richCmp(VirtualFrame frame, Object self, Object other, RichCmpOp op,
                         @Bind Node inliningTarget,
+                        @Cached DateTimeNodes.TzInfoNode tzInfoNode,
                         @Cached("createFor($node)") IndirectCallData.BoundaryCallData boundaryCallData) {
             Object saved = ExecutionContext.BoundaryCallContext.enter(frame, boundaryCallData);
             try {
-                return richCmpBoundary(self, other, op, inliningTarget);
+                return richCmpBoundary(self, other, op, inliningTarget, tzInfoNode);
             } finally {
                 // A Python method call (using DatetimeModuleBuiltins.callUtcOffset)
                 // should be connected to a current node.
@@ -550,22 +568,45 @@ public final class DateTimeBuiltins extends PythonBuiltins {
         }
 
         @TruffleBoundary
-        private static Object richCmpBoundary(PDateTime self, PDateTime other, RichCmpOp op, Node inliningTarget) {
+        private static Object richCmpBoundary(Object selfObj, Object otherObj, RichCmpOp op, Node inliningTarget, DateTimeNodes.TzInfoNode tzInfoNode) {
+            if (!PyDateTimeCheckNode.executeUncached(otherObj)) {
+                /*
+                 * Prevent invocation of date_richcompare. We want to return NotImplemented here to
+                 * give the other object a chance. But since DateTime is a subclass of Date, if the
+                 * other object is a Date, it would compute an ordering based on the date part
+                 * alone, and we don't want that. So force unequal or uncomparable here in that
+                 * case.
+                 */
+                if (PyDateCheckNode.executeUncached(otherObj)) {
+                    if (op == RichCmpOp.Py_EQ) {
+                        return false;
+                    } else if (op == RichCmpOp.Py_NE) {
+                        return true;
+                    } else {
+                        throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.CANT_COMPARE, selfObj, otherObj);
+                    }
+                }
+                return PNotImplemented.NOT_IMPLEMENTED;
+            }
+            DateTimeValue self = TemporalValueNodes.GetDateTimeValue.executeUncached(inliningTarget, selfObj);
+            DateTimeValue other = TemporalValueNodes.GetDateTimeValue.executeUncached(inliningTarget, otherObj);
+            Object selfTzInfo = tzInfoNode.execute(inliningTarget, selfObj);
+            Object otherTzInfo = tzInfoNode.execute(inliningTarget, otherObj);
             // either naive datetimes (without timezone) or timezones are exactly the same objects
-            if (self.tzInfo == other.tzInfo) {
+            if (selfTzInfo == otherTzInfo) {
                 int result = compareDateTimeComponents(self, other);
                 return op.compareResultToBool(result);
             }
 
-            PTimeDelta selfUtcOffset = DatetimeModuleBuiltins.callUtcOffset(self.tzInfo, self, inliningTarget);
-            PTimeDelta otherUtcOffset = DatetimeModuleBuiltins.callUtcOffset(other.tzInfo, other, inliningTarget);
+            PTimeDelta selfUtcOffset = DatetimeModuleBuiltins.callUtcOffset(selfTzInfo, selfObj, inliningTarget);
+            PTimeDelta otherUtcOffset = DatetimeModuleBuiltins.callUtcOffset(otherTzInfo, otherObj, inliningTarget);
 
             if (Objects.equals(selfUtcOffset, otherUtcOffset)) {
                 int result = compareDateTimeComponents(self, other);
 
                 if (result == 0 && (op == RichCmpOp.Py_EQ || op == RichCmpOp.Py_NE) && selfUtcOffset != null) {
                     // if any utc offset is affected by a fold value - return false
-                    if (isExceptionInPep495(self, selfUtcOffset, other, otherUtcOffset, inliningTarget)) {
+                    if (isExceptionInPep495(selfObj, self, selfTzInfo, selfUtcOffset, otherObj, other, otherTzInfo, otherUtcOffset, inliningTarget)) {
                         result = 1;
                     }
                 }
@@ -594,7 +635,7 @@ public final class DateTimeBuiltins extends PythonBuiltins {
 
             if (result == 0 && (op == RichCmpOp.Py_EQ || op == RichCmpOp.Py_NE)) {
                 // if any utc offset is affected by a fold value - return false
-                if (isExceptionInPep495(self, selfUtcOffset, other, otherUtcOffset, inliningTarget)) {
+                if (isExceptionInPep495(selfObj, self, selfTzInfo, selfUtcOffset, otherObj, other, otherTzInfo, otherUtcOffset, inliningTarget)) {
                     result = 1;
                 }
             }
@@ -602,31 +643,8 @@ public final class DateTimeBuiltins extends PythonBuiltins {
             return op.compareResultToBool(result);
         }
 
-        @Specialization
-        static Object richCmp(PDateTime self, PDate other, RichCmpOp op,
-                        @Bind Node inliningTarget,
-                        @Cached PRaiseNode raiseNode) {
-            // Prevent invocation of date#{__eq__, __ne__, etc}
-            if (op == RichCmpOp.Py_EQ) {
-                return false;
-            } else if (op == RichCmpOp.Py_NE) {
-                return true;
-            } else {
-                throw raiseNode.raise(inliningTarget,
-                                TypeError,
-                                ErrorMessages.CANT_COMPARE,
-                                self,
-                                other);
-            }
-        }
-
-        @Fallback
-        static PNotImplemented doGeneric(Object self, Object other, RichCmpOp op) {
-            return PNotImplemented.NOT_IMPLEMENTED;
-        }
-
         @TruffleBoundary
-        private static int compareDateTimeComponents(PDateTime self, PDateTime other) {
+        private static int compareDateTimeComponents(DateTimeValue self, DateTimeValue other) {
             // compare only year, month, day, hours, minutes, ... and ignore fold
             int[] selfComponents = new int[]{self.year, self.month, self.day, self.hour, self.minute, self.second, self.microsecond};
             int[] otherComponents = new int[]{other.year, other.month, other.day, other.hour, other.minute, other.second, other.microsecond};
@@ -639,50 +657,50 @@ public final class DateTimeBuiltins extends PythonBuiltins {
          * 495 – Local Time Disambiguation". See <a href="https://peps.python.org/pep-0495/">PEP 495
          * – Local Time Disambiguation</a>
          */
-        private static boolean isExceptionInPep495(PDateTime self, PTimeDelta selfUtcOffset, PDateTime other, PTimeDelta otherUtcOffset, Node inliningTarget) {
-            return isExceptionInPep495(self, selfUtcOffset, inliningTarget) || isExceptionInPep495(other, otherUtcOffset, inliningTarget);
+        private static boolean isExceptionInPep495(Object selfObj, DateTimeValue self, Object selfTzInfo, PTimeDelta selfUtcOffset, Object otherObj, DateTimeValue other, Object otherTzInfo,
+                        PTimeDelta otherUtcOffset, Node inliningTarget) {
+            return isExceptionInPep495(selfObj, self, selfTzInfo, selfUtcOffset, inliningTarget) || isExceptionInPep495(otherObj, other, otherTzInfo, otherUtcOffset, inliningTarget);
         }
 
-        @TruffleBoundary
-        private static boolean isExceptionInPep495(PDateTime dateTime, PTimeDelta utcOffset, Node inliningTarget) {
-            Object cls = dateTime.getPythonClass();
-            Shape shape = TypeNodes.GetInstanceShape.getUncached().execute(cls);
+        private static boolean isExceptionInPep495(Object dateTimeObj, DateTimeValue dateTime, Object tzInfo, PTimeDelta utcOffset, Node inliningTarget) {
             int fold = dateTime.fold == 1 ? 0 : 1;
-
-            PDateTime newDateTime = new PDateTime(cls, shape, dateTime.year, dateTime.month, dateTime.day, dateTime.hour, dateTime.minute, dateTime.second,
-                            dateTime.microsecond, dateTime.tzInfo, fold);
-            PTimeDelta newUtcOffset = DatetimeModuleBuiltins.callUtcOffset(newDateTime.tzInfo, newDateTime, inliningTarget);
+            Shape shape = PythonBuiltinClassType.PDateTime.getInstanceShape(PythonLanguage.get(inliningTarget));
+            Object newDateTime = new PDateTime(PythonBuiltinClassType.PDateTime, shape, dateTime.year, dateTime.month, dateTime.day, dateTime.hour, dateTime.minute, dateTime.second,
+                            dateTime.microsecond, tzInfo, fold);
+            PTimeDelta newUtcOffset = DatetimeModuleBuiltins.callUtcOffset(tzInfo, newDateTime, inliningTarget);
 
             return !utcOffset.equals(newUtcOffset);
         }
     }
 
-    @Slot(value = Slot.SlotKind.tp_hash, isComplex = true)
+    @Slot(value = SlotKind.tp_hash, isComplex = true)
     @GenerateNodeFactory
     abstract static class HashNode extends HashBuiltinNode {
 
         @Specialization
-        static long hash(VirtualFrame frame, PDateTime self,
+        static long hash(VirtualFrame frame, Object selfObj,
                         @Bind Node inliningTarget,
+                        @Cached DateTimeNodes.TzInfoNode tzInfoNode,
                         @Cached PyObjectCallMethodObjArgs callMethodObjArgs,
-                        @Cached PRaiseNode raiseNode,
-                        @Cached TypeNodes.GetInstanceShape getInstanceShape) {
+                        @Cached PRaiseNode raiseNode) {
+            DateTimeValue self = TemporalValueNodes.GetDateTimeValue.executeUncached(inliningTarget, selfObj);
+            Object tzInfo = tzInfoNode.execute(inliningTarget, selfObj);
             final PTimeDelta offset;
-            if (self.tzInfo == null) {
+            if (tzInfo == null) {
                 offset = null;
             } else {
                 // ignore fold in calculating utc offset
-                final PDateTime getUtcOffsetFrom;
+                final Object getUtcOffsetFrom;
                 if (self.fold == 1) {
                     // reset fold
-                    Object cls = self.getPythonClass();
-                    Shape shape = getInstanceShape.execute(cls);
-                    getUtcOffsetFrom = new PDateTime(cls, shape, self.year, self.month, self.day, self.hour, self.minute, self.second, self.microsecond, self.tzInfo, 0);
+                    Shape shape = PythonBuiltinClassType.PDateTime.getInstanceShape(PythonLanguage.get(inliningTarget));
+                    getUtcOffsetFrom = new PDateTime(PythonBuiltinClassType.PDateTime, shape, self.year, self.month, self.day, self.hour, self.minute, self.second, self.microsecond,
+                                    tzInfo, 0);
                 } else {
-                    getUtcOffsetFrom = self;
+                    getUtcOffsetFrom = selfObj;
                 }
 
-                offset = DatetimeModuleBuiltins.callUtcOffset(self.tzInfo, getUtcOffsetFrom, frame, inliningTarget, callMethodObjArgs, raiseNode);
+                offset = DatetimeModuleBuiltins.callUtcOffset(tzInfo, getUtcOffsetFrom, frame, inliningTarget, callMethodObjArgs, raiseNode);
             }
 
             if (offset == null) {
@@ -693,28 +711,31 @@ public final class DateTimeBuiltins extends PythonBuiltins {
         }
 
         @TruffleBoundary
-        private static long getHashForDateTime(PDateTime self) {
+        private static long getHashForDateTime(DateTimeValue self) {
             return Objects.hash(self.year, self.month, self.day, self.hour, self.minute, self.second, self.microsecond);
         }
 
         @TruffleBoundary
-        private static long getHashForDateTimeWithOffset(PDateTime self, PTimeDelta offset) {
+        private static long getHashForDateTimeWithOffset(DateTimeValue self, PTimeDelta offset) {
             LocalDateTime utc = subtractOffsetFromDateTime(self, offset);
             return Objects.hash(utc.getYear(), utc.getMonthValue(), utc.getDayOfMonth(), utc.getHour(), utc.getMinute(), utc.getSecond(), utc.getNano() / 1_000);
         }
     }
 
-    @Slot(value = Slot.SlotKind.nb_add, isComplex = true)
+    @Slot(value = SlotKind.nb_add, isComplex = true)
     @GenerateNodeFactory
     abstract static class AddNode extends BinaryOpBuiltinNode {
 
         @Specialization
-        static Object add(VirtualFrame frame, PDateTime self, PTimeDelta timeDelta,
+        static Object add(VirtualFrame frame, Object left, Object right,
                         @Bind Node inliningTarget,
-                        @Cached("createFor($node)") @Shared IndirectCallData.BoundaryCallData boundaryCallData) {
+                        @Cached IsForeignObjectNode isForeignObjectNode,
+                        @Cached GetClassNode getClassNode,
+                        @Cached DateTimeNodes.TzInfoNode tzInfoNode,
+                        @Cached("createFor($node)") IndirectCallData.BoundaryCallData boundaryCallData) {
             Object saved = ExecutionContext.BoundaryCallContext.enter(frame, boundaryCallData);
             try {
-                return addBoundary(self, timeDelta, inliningTarget);
+                return addBoundary(left, right, inliningTarget, isForeignObjectNode, getClassNode, tzInfoNode);
             } finally {
                 // A Python method call (using DateTimeNodes.SubclassNewNode) should be
                 // connected to a current node.
@@ -723,41 +744,51 @@ public final class DateTimeBuiltins extends PythonBuiltins {
         }
 
         @TruffleBoundary
-        private static Object addBoundary(PDateTime self, PTimeDelta timeDelta, Node inliningTarget) {
-            LocalDateTime local = toLocalDateTime(self);
-            LocalDateTime localAdjusted = local.plusDays(timeDelta.days).plusSeconds(timeDelta.seconds).plusNanos(timeDelta.microseconds * 1_000L);
+        private static Object addBoundary(Object left, Object right, Node inliningTarget, IsForeignObjectNode isForeignObjectNode, GetClassNode getClassNode,
+                        DateTimeNodes.TzInfoNode tzInfoNode) {
+            Object dateTimeObj, deltaObj;
+            if (PyDateTimeCheckNode.executeUncached(left)) {
+                if (PyDeltaCheckNode.executeUncached(right)) {
+                    dateTimeObj = left;
+                    deltaObj = right;
+                } else {
+                    return PNotImplemented.NOT_IMPLEMENTED;
+                }
+            } else if (PyDeltaCheckNode.executeUncached(left)) {
+                dateTimeObj = right;
+                deltaObj = left;
+            } else {
+                return PNotImplemented.NOT_IMPLEMENTED;
+            }
+            DateTimeValue date = TemporalValueNodes.GetDateTimeValue.executeUncached(inliningTarget, dateTimeObj);
+            TimeDeltaValue delta = TemporalValueNodes.GetTimeDeltaValue.executeUncached(inliningTarget, deltaObj);
+
+            LocalDateTime local = date.toLocalDateTime();
+            LocalDateTime localAdjusted = local.plusDays(delta.days).plusSeconds(delta.seconds).plusNanos(delta.microseconds * 1_000L);
 
             if (localAdjusted.getYear() < MIN_YEAR || localAdjusted.getYear() > MAX_YEAR) {
                 throw PRaiseNode.raiseStatic(inliningTarget, OverflowError, ErrorMessages.DATE_VALUE_OUT_OF_RANGE);
             }
 
-            return toPDateTime(localAdjusted, self.tzInfo, self.fold, inliningTarget, self.getPythonClass());
-        }
-
-        @Specialization
-        static Object radd(VirtualFrame frame, PTimeDelta timeDelta, PDateTime self,
-                        @Bind Node inliningTarget,
-                        @Cached("createFor($node)") @Shared IndirectCallData.BoundaryCallData boundaryCallData) {
-            return add(frame, self, timeDelta, inliningTarget, boundaryCallData);
-        }
-
-        @Fallback
-        Object addObject(Object self, Object other) {
-            return PNotImplemented.NOT_IMPLEMENTED;
+            Object tzInfo = tzInfoNode.execute(inliningTarget, dateTimeObj);
+            return toPDateTime(localAdjusted, tzInfo, date.fold, inliningTarget, getResultDateTimeType(dateTimeObj, inliningTarget, isForeignObjectNode, getClassNode));
         }
     }
 
-    @Slot(value = Slot.SlotKind.nb_subtract, isComplex = true)
+    @Slot(value = SlotKind.nb_subtract, isComplex = true)
     @GenerateNodeFactory
     abstract static class SubNode extends BinaryOpBuiltinNode {
 
         @Specialization
-        static PTimeDelta sub(VirtualFrame frame, PDateTime self, PDateTime other,
+        static Object sub(VirtualFrame frame, Object left, Object right,
                         @Bind Node inliningTarget,
-                        @Cached("createFor($node)") @Shared IndirectCallData.BoundaryCallData boundaryCallData) {
+                        @Cached IsForeignObjectNode isForeignObjectNode,
+                        @Cached GetClassNode getClassNode,
+                        @Cached DateTimeNodes.TzInfoNode tzInfoNode,
+                        @Cached("createFor($node)") IndirectCallData.BoundaryCallData boundaryCallData) {
             Object saved = ExecutionContext.BoundaryCallContext.enter(frame, boundaryCallData);
             try {
-                return subBoundary(self, other, inliningTarget);
+                return subBoundary(left, right, inliningTarget, isForeignObjectNode, getClassNode, tzInfoNode);
             } finally {
                 // A Python method call (using DatetimeModuleBuiltins.callUtcOffset)
                 // should be connected to a current node.
@@ -766,83 +797,81 @@ public final class DateTimeBuiltins extends PythonBuiltins {
         }
 
         @TruffleBoundary
-        private static PTimeDelta subBoundary(PDateTime self, PDateTime other, Node inliningTarget) {
-            final PTimeDelta selfOffset;
-            final PTimeDelta otherOffset;
-
-            selfOffset = DatetimeModuleBuiltins.callUtcOffset(self.tzInfo, self, inliningTarget);
-            otherOffset = DatetimeModuleBuiltins.callUtcOffset(other.tzInfo, other, inliningTarget);
-
-            if ((selfOffset == null) != (otherOffset == null)) {
-                throw PRaiseNode.raiseStatic(inliningTarget,
-                                TypeError,
-                                ErrorMessages.CANNOT_SUBTRACT_OFFSET_NAIVE_AND_OFFSET_AWARE_DATETIMES);
+        private static Object subBoundary(Object left, Object right, Node inliningTarget, IsForeignObjectNode isForeignObjectNode, GetClassNode getClassNode,
+                        DateTimeNodes.TzInfoNode tzInfoNode) {
+            if (!PyDateTimeCheckNode.executeUncached(left)) {
+                return PNotImplemented.NOT_IMPLEMENTED;
             }
+            DateTimeValue self = TemporalValueNodes.GetDateTimeValue.executeUncached(inliningTarget, left);
+            Object selfTzInfo = tzInfoNode.execute(inliningTarget, left);
+            if (PyDateTimeCheckNode.executeUncached(right)) {
+                DateTimeValue other = TemporalValueNodes.GetDateTimeValue.executeUncached(inliningTarget, right);
+                Object otherTzInfo = tzInfoNode.execute(inliningTarget, right);
 
-            final LocalDateTime selfToCompare;
-            final LocalDateTime otherToCompare;
+                final PTimeDelta selfOffset = DatetimeModuleBuiltins.callUtcOffset(selfTzInfo, left, inliningTarget);
+                final PTimeDelta otherOffset = DatetimeModuleBuiltins.callUtcOffset(otherTzInfo, right, inliningTarget);
 
-            if (selfOffset != null && otherOffset != null && self.tzInfo != other.tzInfo) {
-                selfToCompare = subtractOffsetFromDateTime(self, selfOffset);
-                otherToCompare = subtractOffsetFromDateTime(other, otherOffset);
+                if ((selfOffset == null) != (otherOffset == null)) {
+                    throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.CANNOT_SUBTRACT_OFFSET_NAIVE_AND_OFFSET_AWARE_DATETIMES);
+                }
+
+                final LocalDateTime selfToCompare;
+                final LocalDateTime otherToCompare;
+
+                if (selfOffset != null && selfTzInfo != otherTzInfo) {
+                    selfToCompare = subtractOffsetFromDateTime(self, selfOffset);
+                    otherToCompare = subtractOffsetFromDateTime(other, otherOffset);
+                } else {
+                    selfToCompare = self.toLocalDateTime();
+                    otherToCompare = other.toLocalDateTime();
+                }
+
+                long selfSeconds = selfToCompare.toEpochSecond(ZoneOffset.UTC);
+                long otherSeconds = otherToCompare.toEpochSecond(ZoneOffset.UTC);
+
+                return TimeDeltaNodes.NewNode.getUncached().execute(inliningTarget,
+                                PythonBuiltinClassType.PTimeDelta,
+                                0,
+                                selfSeconds - otherSeconds,
+                                self.microsecond - other.microsecond,
+                                0,
+                                0,
+                                0,
+                                0);
+            } else if (PyDeltaCheckNode.executeUncached(right)) {
+                TimeDeltaValue timeDelta = TemporalValueNodes.GetTimeDeltaValue.executeUncached(inliningTarget, right);
+                LocalDateTime local = self.toLocalDateTime();
+                LocalDateTime localAdjusted = local.minusDays(timeDelta.days).minusSeconds(timeDelta.seconds).minusNanos(timeDelta.microseconds * 1_000L);
+
+                if (localAdjusted.getYear() < MIN_YEAR || localAdjusted.getYear() > MAX_YEAR) {
+                    throw PRaiseNode.raiseStatic(inliningTarget, OverflowError, ErrorMessages.DATE_VALUE_OUT_OF_RANGE);
+                }
+
+                return toPDateTime(localAdjusted, selfTzInfo, self.fold, inliningTarget, getResultDateTimeType(left, inliningTarget, isForeignObjectNode, getClassNode));
             } else {
-                selfToCompare = toLocalDateTime(self);
-                otherToCompare = toLocalDateTime(other);
+                return PNotImplemented.NOT_IMPLEMENTED;
             }
-
-            long selfSeconds = selfToCompare.toEpochSecond(ZoneOffset.UTC);
-            long otherSeconds = otherToCompare.toEpochSecond(ZoneOffset.UTC);
-
-            return TimeDeltaNodes.NewNode.getUncached().execute(inliningTarget,
-                            PythonBuiltinClassType.PTimeDelta,
-                            0,
-                            selfSeconds - otherSeconds,
-                            self.microsecond - other.microsecond,
-                            0,
-                            0,
-                            0,
-                            0);
-        }
-
-        @Specialization
-        static Object subTimeDelta(VirtualFrame frame, PDateTime self, PTimeDelta timeDelta,
-                        @Bind Node inliningTarget,
-                        @Cached("createFor($node)") @Shared IndirectCallData.BoundaryCallData boundaryCallData) {
-            Object saved = ExecutionContext.BoundaryCallContext.enter(frame, boundaryCallData);
-            try {
-                return subTimeDeltaBoundary(self, timeDelta, inliningTarget);
-            } finally {
-                // A Python method call (DateTimeNodes.SubclassNewNode) should be
-                // connected to a current node.
-                ExecutionContext.BoundaryCallContext.exit(frame, boundaryCallData, saved);
-            }
-        }
-
-        @TruffleBoundary
-        private static Object subTimeDeltaBoundary(PDateTime self, PTimeDelta timeDelta, Node inliningTarget) {
-            LocalDateTime local = toLocalDateTime(self);
-            LocalDateTime localAdjusted = local.minusDays(timeDelta.days).minusSeconds(timeDelta.seconds).minusNanos(timeDelta.microseconds * 1_000L);
-
-            if (localAdjusted.getYear() < MIN_YEAR || localAdjusted.getYear() > MAX_YEAR) {
-                throw PRaiseNode.raiseStatic(inliningTarget, OverflowError, ErrorMessages.DATE_VALUE_OUT_OF_RANGE);
-            }
-
-            return toPDateTime(localAdjusted, self.tzInfo, self.fold, inliningTarget, self.getPythonClass());
-        }
-
-        @Fallback
-        Object subObject(Object self, Object other) {
-            return PNotImplemented.NOT_IMPLEMENTED;
         }
     }
 
     @Builtin(name = "hour", minNumOfPositionalArgs = 1, isGetter = true)
     @GenerateNodeFactory
     abstract static class HourNode extends PythonUnaryBuiltinNode {
+        @Specialization
+        static int getHour(PDateTime self) {
+            return self.hour;
+        }
 
         @Specialization
-        static int getHour(VirtualFrame frame, PDateTime self) {
-            return self.hour;
+        static int getHour(PythonAbstractNativeObject self) {
+            return DateTimeNodes.FromNative.getHour(self);
+        }
+
+        @Specialization
+        static int getHour(Object self,
+                        @Bind Node inliningTarget,
+                        @Cached TemporalValueNodes.GetDateTimeValue readDateTimeValueNode) {
+            return readDateTimeValueNode.execute(inliningTarget, self).hour;
         }
     }
 
@@ -851,8 +880,20 @@ public final class DateTimeBuiltins extends PythonBuiltins {
     abstract static class MinuteNode extends PythonUnaryBuiltinNode {
 
         @Specialization
-        static int getMinute(VirtualFrame frame, PDateTime self) {
+        static int getMinute(PDateTime self) {
             return self.minute;
+        }
+
+        @Specialization
+        static int getMinute(PythonAbstractNativeObject self) {
+            return DateTimeNodes.FromNative.getMinute(self);
+        }
+
+        @Specialization
+        static int getMinute(Object self,
+                        @Bind Node inliningTarget,
+                        @Cached TemporalValueNodes.GetDateTimeValue readDateTimeValueNode) {
+            return readDateTimeValueNode.execute(inliningTarget, self).minute;
         }
     }
 
@@ -861,8 +902,20 @@ public final class DateTimeBuiltins extends PythonBuiltins {
     abstract static class SecondNode extends PythonUnaryBuiltinNode {
 
         @Specialization
-        static int getSecond(VirtualFrame frame, PDateTime self) {
+        static int getSecond(PDateTime self) {
             return self.second;
+        }
+
+        @Specialization
+        static int getSecond(PythonAbstractNativeObject self) {
+            return DateTimeNodes.FromNative.getSecond(self);
+        }
+
+        @Specialization
+        static int getSecond(Object self,
+                        @Bind Node inliningTarget,
+                        @Cached TemporalValueNodes.GetDateTimeValue readDateTimeValueNode) {
+            return readDateTimeValueNode.execute(inliningTarget, self).second;
         }
     }
 
@@ -871,8 +924,20 @@ public final class DateTimeBuiltins extends PythonBuiltins {
     abstract static class MicrosecondNode extends PythonUnaryBuiltinNode {
 
         @Specialization
-        static int getMicrosecond(VirtualFrame frame, PDateTime self) {
+        static int getMicrosecond(PDateTime self) {
             return self.microsecond;
+        }
+
+        @Specialization
+        static int getMicrosecond(PythonAbstractNativeObject self) {
+            return DateTimeNodes.FromNative.getMicrosecond(self);
+        }
+
+        @Specialization
+        static int getMicrosecond(Object self,
+                        @Bind Node inliningTarget,
+                        @Cached TemporalValueNodes.GetDateTimeValue readDateTimeValueNode) {
+            return readDateTimeValueNode.execute(inliningTarget, self).microsecond;
         }
     }
 
@@ -881,12 +946,11 @@ public final class DateTimeBuiltins extends PythonBuiltins {
     abstract static class TzInfoNode extends PythonUnaryBuiltinNode {
 
         @Specialization
-        static Object getTzInfo(VirtualFrame frame, PDateTime self) {
-            if (self.tzInfo == null) {
-                return PNone.NONE;
-            }
-
-            return self.tzInfo;
+        static Object getTzInfo(Object self,
+                        @Bind Node inliningTarget,
+                        @Cached DateTimeNodes.TzInfoNode tzInfoNode) {
+            Object tzinfo = tzInfoNode.execute(inliningTarget, self);
+            return tzinfo != null ? tzinfo : PNone.NONE;
         }
     }
 
@@ -895,8 +959,20 @@ public final class DateTimeBuiltins extends PythonBuiltins {
     abstract static class FoldNode extends PythonUnaryBuiltinNode {
 
         @Specialization
-        static int getFold(VirtualFrame frame, PDateTime self) {
+        static int getFold(PDateTime self) {
             return self.fold;
+        }
+
+        @Specialization
+        static int getFold(PythonAbstractNativeObject self) {
+            return DateTimeNodes.FromNative.getFold(self);
+        }
+
+        @Specialization
+        static int getFold(Object self,
+                        @Bind Node inliningTarget,
+                        @Cached TemporalValueNodes.GetDateTimeValue readDateTimeValueNode) {
+            return readDateTimeValueNode.execute(inliningTarget, self).fold;
         }
     }
 
@@ -952,7 +1028,7 @@ public final class DateTimeBuiltins extends PythonBuiltins {
             if (tzInfoObject instanceof PNone) {
                 tzInfo = null;
             } else {
-                if (!(tzInfoObject instanceof PTzInfo)) {
+                if (!PyTZInfoCheckNode.executeUncached(tzInfoObject)) {
                     throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.TZINFO_ARGUMENT_MUST_BE_NONE_OR_OF_A_TZINFO_SUBCLASS_NOT_TYPE_P, tzInfoObject);
                 }
 
@@ -1125,8 +1201,9 @@ public final class DateTimeBuiltins extends PythonBuiltins {
         static Object combine(Object cls, Object dateObject, Object timeObject, Object tzInfoObject,
                         @Bind Node inliningTarget,
                         @Cached PRaiseNode raiseNode,
+                        @Cached TimeNodes.TzInfoNode timeTzInfoNode,
                         @Cached DateTimeNodes.SubclassNewNode newNode) {
-            if (!(dateObject instanceof PDate date)) {
+            if (!PyDateCheckNode.executeUncached(dateObject)) {
                 throw raiseNode.raise(inliningTarget,
                                 TypeError,
                                 ErrorMessages.ARG_D_MUST_BE_S_NOT_P,
@@ -1136,7 +1213,7 @@ public final class DateTimeBuiltins extends PythonBuiltins {
                                 dateObject);
             }
 
-            if (!(timeObject instanceof PTime time)) {
+            if (!PyTimeCheckNode.executeUncached(timeObject)) {
                 throw raiseNode.raise(inliningTarget,
                                 TypeError,
                                 ErrorMessages.ARG_D_MUST_BE_S_NOT_P,
@@ -1146,14 +1223,17 @@ public final class DateTimeBuiltins extends PythonBuiltins {
                                 timeObject);
             }
 
+            DateValue date = TemporalValueNodes.GetDateValue.executeUncached(inliningTarget, dateObject);
+            TimeValue time = TemporalValueNodes.GetTimeValue.executeUncached(inliningTarget, timeObject);
+
             final Object tzInfo;
             if (tzInfoObject instanceof PNone) {
-                tzInfo = time.tzInfo;
+                tzInfo = timeTzInfoNode.execute(inliningTarget, timeObject);
             } else {
                 tzInfo = tzInfoObject;
             }
 
-            if (tzInfo != null && !(tzInfo instanceof PTzInfo)) {
+            if (tzInfo != null && !PyTZInfoCheckNode.executeUncached(tzInfo)) {
                 throw raiseNode.raise(inliningTarget,
                                 TypeError,
                                 ErrorMessages.TZINFO_ARGUMENT_MUST_BE_NONE_OR_OF_A_TZINFO_SUBCLASS_NOT_TYPE_P,
@@ -1240,15 +1320,13 @@ public final class DateTimeBuiltins extends PythonBuiltins {
                 } else if (utcOffset.isUtc()) {
                     timezone = DatetimeModuleBuiltins.getUtcTimeZone(getContext(inliningTarget));
                 } else {
-                    Object timeDeltaType = PythonBuiltinClassType.PTimeDelta;
-
                     final PTimeDelta timeDelta;
                     if (utcOffset.sign >= 0) {
-                        timeDelta = TimeDeltaNodes.NewNode.getUncached().execute(inliningTarget, timeDeltaType, 0, utcOffset.seconds, utcOffset.microseconds, 0, utcOffset.minutes,
-                                        utcOffset.hours, 0);
+                        timeDelta = TimeDeltaNodes.NewNode.getUncached().executeBuiltin(inliningTarget,
+                                        0, utcOffset.seconds, utcOffset.microseconds, 0, utcOffset.minutes, utcOffset.hours, 0);
                     } else {
-                        timeDelta = TimeDeltaNodes.NewNode.getUncached().execute(inliningTarget, timeDeltaType, 0, -utcOffset.seconds, -utcOffset.microseconds, 0, -utcOffset.minutes,
-                                        -utcOffset.hours, 0);
+                        timeDelta = TimeDeltaNodes.NewNode.getUncached().executeBuiltin(inliningTarget,
+                                        0, -utcOffset.seconds, -utcOffset.microseconds, 0, -utcOffset.minutes, -utcOffset.hours, 0);
                     }
 
                     DatetimeModuleBuiltins.validateUtcOffset(timeDelta, inliningTarget);
@@ -2287,22 +2365,14 @@ public final class DateTimeBuiltins extends PythonBuiltins {
                                 TimeZone timeZone = TimeModuleBuiltins.getGlobalTimeZone(context);
                                 String zoneName = timeZone.getDisplayName(false, TimeZone.SHORT);
                                 String zoneNameDaylightSaving = timeZone.getDisplayName(true, TimeZone.SHORT);
+                                String matchedZoneName = matchTimeZoneName(string, i, zoneName, zoneNameDaylightSaving, "UTC", "GMT");
 
-                                if (string.startsWith("UTC", i)) {
-                                    builder.setTimeZoneName("UTC");
-                                    i += 3;
-                                } else if (string.startsWith("GMT", i)) {
-                                    builder.setTimeZoneName("GMT");
-                                    i += 3;
-                                } else if (string.startsWith(zoneName, i)) {
-                                    builder.setTimeZoneName(zoneName);
-                                    i += zoneName.length();
-                                } else if (string.startsWith(zoneNameDaylightSaving, i)) {
-                                    builder.setTimeZoneName(zoneNameDaylightSaving);
-                                    i += zoneNameDaylightSaving.length();
-                                } else {
+                                if (matchedZoneName == null) {
                                     throw PRaiseNode.raiseStatic(inliningTarget, ValueError, ErrorMessages.TIME_DATA_S_DOES_NOT_MATCH_FORMAT_S, string, format);
                                 }
+
+                                builder.setTimeZoneName(matchedZoneName);
+                                i += matchedZoneName.length();
                             }
                             case 'j' -> {
                                 var pos = new ParsePosition(i);
@@ -2426,10 +2496,11 @@ public final class DateTimeBuiltins extends PythonBuiltins {
                 if (builder.getTimeZoneUtcOffsetAsSeconds() != null) {
                     final PTimeDelta utcOffset;
                     if (builder.getTimeZoneUtcOffsetMicroseconds() == null) {
-                        utcOffset = TimeDeltaNodes.NewNode.getUncached().execute(inliningTarget, PythonBuiltinClassType.PTimeDelta, 0, builder.getTimeZoneUtcOffsetAsSeconds(), 0, 0, 0, 0, 0);
+                        utcOffset = TimeDeltaNodes.NewNode.getUncached().executeBuiltin(inliningTarget,
+                                        0, builder.getTimeZoneUtcOffsetAsSeconds(), 0, 0, 0, 0, 0);
                     } else {
-                        utcOffset = TimeDeltaNodes.NewNode.getUncached().execute(inliningTarget, PythonBuiltinClassType.PTimeDelta, 0, builder.getTimeZoneUtcOffsetAsSeconds(),
-                                        builder.getTimeZoneUtcOffsetMicroseconds(), 0, 0, 0, 0);
+                        utcOffset = TimeDeltaNodes.NewNode.getUncached().executeBuiltin(inliningTarget,
+                                        0, builder.getTimeZoneUtcOffsetAsSeconds(), builder.getTimeZoneUtcOffsetMicroseconds(), 0, 0, 0, 0);
                     }
 
                     if (builder.getTimeZoneName() == null) {
@@ -2461,6 +2532,16 @@ public final class DateTimeBuiltins extends PythonBuiltins {
             }
 
             return result;
+        }
+
+        private static String matchTimeZoneName(String string, int from, String... candidates) {
+            String matched = null;
+            for (String candidate : candidates) {
+                if (candidate != null && string.startsWith(candidate, from) && (matched == null || candidate.length() > matched.length())) {
+                    matched = candidate;
+                }
+            }
+            return matched;
         }
 
         @TruffleBoundary
@@ -2498,9 +2579,10 @@ public final class DateTimeBuiltins extends PythonBuiltins {
     abstract static class DateNode extends PythonUnaryBuiltinNode {
 
         @Specialization
-        static PDate getDate(VirtualFrame frame, PDateTime self,
+        static Object getDate(Object selfObj,
                         @Bind Node inliningTarget,
                         @Cached DateNodes.NewNode newDateNode) {
+            DateTimeValue self = TemporalValueNodes.GetDateTimeValue.executeUncached(inliningTarget, selfObj);
             return newDateNode.execute(inliningTarget,
                             PythonBuiltinClassType.PDate,
                             self.year,
@@ -2514,9 +2596,10 @@ public final class DateTimeBuiltins extends PythonBuiltins {
     abstract static class TimeNode extends PythonUnaryBuiltinNode {
 
         @Specialization
-        static PTime getTime(VirtualFrame frame, PDateTime self,
+        static Object getTime(Object selfObj,
                         @Bind Node inliningTarget,
                         @Cached TimeNodes.NewNode newTimeNode) {
+            DateTimeValue self = TemporalValueNodes.GetDateTimeValue.executeUncached(inliningTarget, selfObj);
             return newTimeNode.execute(inliningTarget,
                             PythonBuiltinClassType.PTime,
                             self.hour,
@@ -2533,16 +2616,18 @@ public final class DateTimeBuiltins extends PythonBuiltins {
     abstract static class TimeTzNode extends PythonUnaryBuiltinNode {
 
         @Specialization
-        static PTime getTime(VirtualFrame frame, PDateTime self,
+        static Object getTime(Object selfObj,
                         @Bind Node inliningTarget,
+                        @Cached DateTimeNodes.TzInfoNode tzInfoNode,
                         @Cached TimeNodes.NewNode newTimeNode) {
+            DateTimeValue self = TemporalValueNodes.GetDateTimeValue.executeUncached(inliningTarget, selfObj);
             return newTimeNode.execute(inliningTarget,
                             PythonBuiltinClassType.PTime,
                             self.hour,
                             self.minute,
                             self.second,
                             self.microsecond,
-                            self.tzInfo,
+                            tzInfoNode.execute(inliningTarget, selfObj),
                             self.fold);
         }
     }
@@ -2552,11 +2637,15 @@ public final class DateTimeBuiltins extends PythonBuiltins {
     public abstract static class ReplaceNode extends PythonBuiltinNode {
 
         @Specialization
-        static PDateTime replace(VirtualFrame frame, PDateTime self, Object yearObject, Object monthObject, Object dayObject, Object hourObject, Object minuteObject, Object secondObject,
+        static Object replace(VirtualFrame frame, Object selfObj, Object yearObject, Object monthObject, Object dayObject, Object hourObject, Object minuteObject, Object secondObject,
                         Object microsecondObject, Object tzInfoObject, Object foldObject,
                         @Bind Node inliningTarget,
+                        @Cached IsForeignObjectNode isForeignObjectNode,
+                        @Cached DateTimeNodes.TzInfoNode tzInfoNode,
                         @Cached PyLongAsLongNode asLongNode,
+                        @Cached GetClassNode getClassNode,
                         @Cached DateTimeNodes.NewNode newDateTimeNode) {
+            DateTimeValue self = TemporalValueNodes.GetDateTimeValue.executeUncached(inliningTarget, selfObj);
             final long year, month, day;
 
             if (yearObject instanceof PNone) {
@@ -2605,7 +2694,7 @@ public final class DateTimeBuiltins extends PythonBuiltins {
             }
 
             if (tzInfoObject == PNone.NO_VALUE) {
-                tzInfo = self.tzInfo;
+                tzInfo = tzInfoNode.execute(inliningTarget, selfObj);
             } else if (tzInfoObject == PNone.NONE) {
                 tzInfo = null;
             } else {
@@ -2618,7 +2707,7 @@ public final class DateTimeBuiltins extends PythonBuiltins {
                 fold = asLongNode.execute(frame, inliningTarget, foldObject);
             }
 
-            Object type = self.getPythonClass();
+            Object type = getResultDateTimeType(selfObj, inliningTarget, isForeignObjectNode, getClassNode);
             return newDateTimeNode.execute(inliningTarget, type, year, month, day, hour, minute, second, microsecond, tzInfo, fold);
         }
     }
@@ -2628,12 +2717,15 @@ public final class DateTimeBuiltins extends PythonBuiltins {
     abstract static class AsTimeZoneNode extends PythonBinaryBuiltinNode {
 
         @Specialization
-        static Object inTimeZone(VirtualFrame frame, PDateTime self, Object tzInfo,
+        static Object inTimeZone(VirtualFrame frame, Object self, Object tzInfo,
                         @Bind Node inliningTarget,
+                        @Cached IsForeignObjectNode isForeignObjectNode,
+                        @Cached GetClassNode getClassNode,
+                        @Cached DateTimeNodes.TzInfoNode tzInfoNode,
                         @Cached("createFor($node)") IndirectCallData.BoundaryCallData boundaryCallData) {
             Object saved = ExecutionContext.BoundaryCallContext.enter(frame, boundaryCallData);
             try {
-                return inTimeZoneBoundary(self, tzInfo, inliningTarget);
+                return inTimeZoneBoundary(self, tzInfo, inliningTarget, getResultDateTimeType(self, inliningTarget, isForeignObjectNode, getClassNode), tzInfoNode.execute(inliningTarget, self));
             } finally {
                 // A Python method call (using DatetimeModuleBuiltins.callUtcOffset
                 // and PyObjectCallMethodObjArgs) should be connected to a current node.
@@ -2642,23 +2734,24 @@ public final class DateTimeBuiltins extends PythonBuiltins {
         }
 
         @TruffleBoundary
-        private static Object inTimeZoneBoundary(PDateTime self, Object tzInfo, Node inliningTarget) {
-            if (tzInfo == self.tzInfo) {
-                return self;
+        private static Object inTimeZoneBoundary(Object selfObj, Object tzInfo, Node inliningTarget, Object resultType, Object selfTzInfo) {
+            DateTimeValue self = TemporalValueNodes.GetDateTimeValue.executeUncached(inliningTarget, selfObj);
+            if (tzInfo == selfTzInfo) {
+                return selfObj;
             }
 
             Object sourceTimeZone;
-            if (self.tzInfo != null) {
-                sourceTimeZone = self.tzInfo;
+            if (selfTzInfo != null) {
+                sourceTimeZone = selfTzInfo;
             } else {
-                sourceTimeZone = getSystemTimeZoneAt(toLocalDateTime(self), self.fold, inliningTarget);
+                sourceTimeZone = getSystemTimeZoneAt(self.toLocalDateTime(), self.fold, inliningTarget);
             }
 
-            PTimeDelta sourceOffset = DatetimeModuleBuiltins.callUtcOffset(sourceTimeZone, self, inliningTarget);
+            PTimeDelta sourceOffset = DatetimeModuleBuiltins.callUtcOffset(sourceTimeZone, selfObj, inliningTarget);
 
             if (sourceOffset == null) {
-                sourceTimeZone = getSystemTimeZoneAt(toLocalDateTime(self), self.fold, inliningTarget);
-                sourceOffset = DatetimeModuleBuiltins.callUtcOffset(sourceTimeZone, self, inliningTarget);
+                sourceTimeZone = getSystemTimeZoneAt(self.toLocalDateTime(), self.fold, inliningTarget);
+                sourceOffset = DatetimeModuleBuiltins.callUtcOffset(sourceTimeZone, selfObj, inliningTarget);
             }
 
             LocalDateTime selfAsLocalDateTimeInUtc = subtractOffsetFromDateTime(self, sourceOffset);
@@ -2668,14 +2761,14 @@ public final class DateTimeBuiltins extends PythonBuiltins {
 
             final Object targetTimeZone;
             if (tzInfo instanceof PNone) {
-                targetTimeZone = getSystemTimeZoneAt(toLocalDateTime(self), self.fold, inliningTarget);
-            } else if (!(tzInfo instanceof PTzInfo)) {
+                targetTimeZone = getSystemTimeZoneAt(self.toLocalDateTime(), self.fold, inliningTarget);
+            } else if (!PyTZInfoCheckNode.executeUncached(tzInfo)) {
                 throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.TZINFO_ARGUMENT_MUST_BE_NONE_OR_OF_A_TZINFO_SUBCLASS_NOT_TYPE_P, tzInfo);
             } else {
                 targetTimeZone = tzInfo;
             }
 
-            Object selfInUtc = toPDateTime(selfAsLocalDateTimeInUtc, targetTimeZone, 0, inliningTarget, self.getPythonClass());
+            Object selfInUtc = toPDateTime(selfAsLocalDateTimeInUtc, targetTimeZone, 0, inliningTarget, resultType);
             return PyObjectCallMethodObjArgs.executeUncached(targetTimeZone, T_FROMUTC, selfInUtc);
         }
 
@@ -2714,7 +2807,7 @@ public final class DateTimeBuiltins extends PythonBuiltins {
             int offsetMilliseconds = timeZone.getOffset(timestampMillis);
 
             Object timeDeltaType = PythonBuiltinClassType.PTimeDelta;
-            PTimeDelta offset = TimeDeltaNodes.NewNode.getUncached().execute(inliningTarget, timeDeltaType, 0, 0, 0, offsetMilliseconds, 0, 0, 0);
+            Object offset = TimeDeltaNodes.NewNode.getUncached().execute(inliningTarget, timeDeltaType, 0, 0, 0, offsetMilliseconds, 0, 0, 0);
 
             Object timeZoneType = PythonBuiltinClassType.PTimezone;
             TruffleString timeZoneNameTS = TruffleString.FromJavaStringNode.getUncached().execute(timeZoneName, TS_ENCODING);
@@ -2728,11 +2821,13 @@ public final class DateTimeBuiltins extends PythonBuiltins {
     abstract static class UtcOffsetNode extends PythonUnaryBuiltinNode {
 
         @Specialization
-        static Object getUtcOffset(VirtualFrame frame, PDateTime self,
+        static Object getUtcOffset(VirtualFrame frame, Object selfObj,
                         @Bind Node inliningTarget,
+                        @Cached DateTimeNodes.TzInfoNode tzInfoNode,
                         @Cached PyObjectCallMethodObjArgs callMethodObjArgs,
                         @Cached PRaiseNode raiseNode) {
-            PTimeDelta offset = DatetimeModuleBuiltins.callUtcOffset(self.tzInfo, self, frame, inliningTarget, callMethodObjArgs, raiseNode);
+            Object tzInfo = tzInfoNode.execute(inliningTarget, selfObj);
+            PTimeDelta offset = DatetimeModuleBuiltins.callUtcOffset(tzInfo, selfObj, frame, inliningTarget, callMethodObjArgs, raiseNode);
 
             if (offset == null) {
                 return PNone.NONE;
@@ -2747,11 +2842,13 @@ public final class DateTimeBuiltins extends PythonBuiltins {
     abstract static class DstNode extends PythonUnaryBuiltinNode {
 
         @Specialization
-        static Object getDst(VirtualFrame frame, PDateTime self,
+        static Object getDst(VirtualFrame frame, Object selfObj,
                         @Bind Node inliningTarget,
+                        @Cached DateTimeNodes.TzInfoNode tzInfoNode,
                         @Cached PyObjectCallMethodObjArgs callMethodObjArgs,
                         @Cached PRaiseNode raiseNode) {
-            PTimeDelta offset = DatetimeModuleBuiltins.callDst(self.tzInfo, self, frame, inliningTarget, callMethodObjArgs, raiseNode);
+            Object tzInfo = tzInfoNode.execute(inliningTarget, selfObj);
+            PTimeDelta offset = DatetimeModuleBuiltins.callDst(tzInfo, selfObj, frame, inliningTarget, callMethodObjArgs, raiseNode);
 
             if (offset == null) {
                 return PNone.NONE;
@@ -2766,16 +2863,18 @@ public final class DateTimeBuiltins extends PythonBuiltins {
     abstract static class TzNameNode extends PythonUnaryBuiltinNode {
 
         @Specialization
-        static Object getTzName(VirtualFrame frame, PDateTime self,
+        static Object getTzName(VirtualFrame frame, Object selfObj,
                         @Bind Node inliningTarget,
+                        @Cached DateTimeNodes.TzInfoNode tzInfoNode,
                         @Cached PyObjectCallMethodObjArgs callMethodObjArgs,
                         @Cached PRaiseNode raiseNode,
                         @Cached PyUnicodeCheckNode unicodeCheckNode) {
-            if (self.tzInfo == null) {
+            Object tzInfo = tzInfoNode.execute(inliningTarget, selfObj);
+            if (tzInfo == null) {
                 return PNone.NONE;
             }
 
-            Object tzName = callMethodObjArgs.execute(frame, inliningTarget, self.tzInfo, T_TZNAME, self);
+            Object tzName = callMethodObjArgs.execute(frame, inliningTarget, tzInfo, T_TZNAME, selfObj);
 
             if (tzName instanceof PNone) {
                 return PNone.NONE;
@@ -2797,13 +2896,14 @@ public final class DateTimeBuiltins extends PythonBuiltins {
     public abstract static class TimeTupleNode extends PythonUnaryBuiltinNode {
 
         @Specialization
-        static PTuple composeTimeTuple(VirtualFrame frame, PDateTime self,
+        static PTuple composeTimeTuple(VirtualFrame frame, Object self,
                         @Bind Node inliningTarget,
                         @Bind PythonLanguage language,
+                        @Cached DateTimeNodes.TzInfoNode tzInfoNode,
                         @Cached("createFor($node)") IndirectCallData.BoundaryCallData boundaryCallData) {
             Object saved = ExecutionContext.BoundaryCallContext.enter(frame, boundaryCallData);
             try {
-                return composeTimeTupleBoundary(self, inliningTarget, language);
+                return composeTimeTupleBoundary(self, inliningTarget, language, tzInfoNode.execute(inliningTarget, self));
             } finally {
                 // A Python method call (using DatetimeModuleBuiltins.callDst) should
                 // be connected to a current node.
@@ -2812,20 +2912,21 @@ public final class DateTimeBuiltins extends PythonBuiltins {
         }
 
         @TruffleBoundary
-        private static PTuple composeTimeTupleBoundary(PDateTime self, Node inliningTarget, PythonLanguage language) {
+        private static PTuple composeTimeTupleBoundary(Object selfObj, Node inliningTarget, PythonLanguage language, Object tzInfo) {
+            DateTimeValue self = TemporalValueNodes.GetDateTimeValue.executeUncached(inliningTarget, selfObj);
             LocalDate localDate = LocalDate.of(self.year, self.month, self.day);
             int dayOfWeek = localDate.getDayOfWeek().getValue() - 1; // Python's day of week range
                                                                      // is 0-6
             int dayOfYear = localDate.getDayOfYear();
-            int isDst = getIsDst(self, inliningTarget);
+            int isDst = getIsDst(tzInfo, selfObj, inliningTarget);
 
             Object[] fields = new Object[]{self.year, self.month, self.day, self.hour, self.minute, self.second, dayOfWeek, dayOfYear, isDst};
             return PFactory.createStructSeq(language, TimeModuleBuiltins.STRUCT_TIME_DESC, fields);
         }
 
-        private static int getIsDst(PDateTime self, Node inliningTarget) {
+        private static int getIsDst(Object tzInfo, Object selfObj, Node inliningTarget) {
             int isDst;
-            PTimeDelta offset = DatetimeModuleBuiltins.callDst(self.tzInfo, self, inliningTarget);
+            PTimeDelta offset = DatetimeModuleBuiltins.callDst(tzInfo, selfObj, inliningTarget);
 
             if (offset == null) {
                 isDst = -1;
@@ -2846,13 +2947,14 @@ public final class DateTimeBuiltins extends PythonBuiltins {
     public abstract static class UtcTimeTupleNode extends PythonUnaryBuiltinNode {
 
         @Specialization
-        static PTuple composeTimeTuple(VirtualFrame frame, PDateTime self,
+        static PTuple composeTimeTuple(VirtualFrame frame, Object self,
                         @Bind Node inliningTarget,
                         @Bind PythonLanguage language,
+                        @Cached DateTimeNodes.TzInfoNode tzInfoNode,
                         @Cached("createFor($node)") IndirectCallData.BoundaryCallData boundaryCallData) {
             Object saved = ExecutionContext.BoundaryCallContext.enter(frame, boundaryCallData);
             try {
-                return composeTimeTupleBoundary(self, inliningTarget, language);
+                return composeTimeTupleBoundary(self, inliningTarget, language, tzInfoNode.execute(inliningTarget, self));
             } finally {
                 // A Python method call (using DatetimeModuleBuiltins.callUtcOffset
                 // and PyObjectCallMethodObjArgs) should be connected to a current node.
@@ -2861,12 +2963,13 @@ public final class DateTimeBuiltins extends PythonBuiltins {
         }
 
         @TruffleBoundary
-        private static PTuple composeTimeTupleBoundary(PDateTime self, Node inliningTarget, PythonLanguage language) {
+        private static PTuple composeTimeTupleBoundary(Object selfObj, Node inliningTarget, PythonLanguage language, Object tzInfo) {
+            DateTimeValue self = TemporalValueNodes.GetDateTimeValue.executeUncached(inliningTarget, selfObj);
             final LocalDateTime localDateTime;
-            PTimeDelta offset = DatetimeModuleBuiltins.callUtcOffset(self.tzInfo, self, inliningTarget);
+            PTimeDelta offset = DatetimeModuleBuiltins.callUtcOffset(tzInfo, selfObj, inliningTarget);
 
             if (offset == null) {
-                localDateTime = toLocalDateTime(self);
+                localDateTime = self.toLocalDateTime();
             } else {
                 // convert self to UTC
                 localDateTime = subtractOffsetFromDateTime(self, offset);
@@ -2893,7 +2996,8 @@ public final class DateTimeBuiltins extends PythonBuiltins {
 
         @Specialization
         @TruffleBoundary
-        static long toOrdinal(PDateTime self) {
+        static long toOrdinal(Object selfObj) {
+            DateTimeValue self = TemporalValueNodes.GetDateTimeValue.executeUncached(null, selfObj);
             LocalDate from = LocalDate.of(1, 1, 1);
             LocalDate to = LocalDate.of(self.year, self.month, self.day);
             return ChronoUnit.DAYS.between(from, to) + 1;
@@ -2905,12 +3009,13 @@ public final class DateTimeBuiltins extends PythonBuiltins {
     public abstract static class TimestampNode extends PythonUnaryBuiltinNode {
 
         @Specialization
-        static double toTimestamp(VirtualFrame frame, PDateTime self,
+        static double toTimestamp(VirtualFrame frame, Object self,
                         @Bind Node inliningTarget,
+                        @Cached DateTimeNodes.TzInfoNode tzInfoNode,
                         @Cached("createFor($node)") IndirectCallData.BoundaryCallData boundaryCallData) {
             Object saved = ExecutionContext.BoundaryCallContext.enter(frame, boundaryCallData);
             try {
-                return toTimestampBoundary(self, inliningTarget);
+                return toTimestampBoundary(self, inliningTarget, tzInfoNode.execute(inliningTarget, self));
             } finally {
                 // A Python method call (using DatetimeModuleBuiltins.callUtcOffset)
                 // should be connected to a current node.
@@ -2919,13 +3024,14 @@ public final class DateTimeBuiltins extends PythonBuiltins {
         }
 
         @TruffleBoundary
-        private static double toTimestampBoundary(PDateTime self, Node inliningTarget) {
-            if (self.tzInfo == null) {
+        private static double toTimestampBoundary(Object selfObj, Node inliningTarget, Object tzInfo) {
+            DateTimeValue self = TemporalValueNodes.GetDateTimeValue.executeUncached(inliningTarget, selfObj);
+            if (tzInfo == null) {
                 // CPython: local_to_seconds()
                 TimeZone timeZone = TimeModuleBuiltins.getGlobalTimeZone(getContext(inliningTarget));
                 ZoneId zoneId = timeZone.toZoneId();
 
-                LocalDateTime localDateTime = toLocalDateTime(self);
+                LocalDateTime localDateTime = self.toLocalDateTime();
                 ZonedDateTime zonedDateTime = ZonedDateTime.of(localDateTime, zoneId);
 
                 if (localDateTime.equals(zonedDateTime.toLocalDateTime())) {
@@ -2952,10 +3058,10 @@ public final class DateTimeBuiltins extends PythonBuiltins {
                 }
             } else {
                 final LocalDateTime localDateTime;
-                PTimeDelta offset = DatetimeModuleBuiltins.callUtcOffset(self.tzInfo, self, inliningTarget);
+                PTimeDelta offset = DatetimeModuleBuiltins.callUtcOffset(tzInfo, selfObj, inliningTarget);
 
                 if (offset == null) {
-                    localDateTime = toLocalDateTime(self);
+                    localDateTime = self.toLocalDateTime();
                 } else {
                     // convert self to UTC
                     localDateTime = subtractOffsetFromDateTime(self, offset);
@@ -2974,12 +3080,13 @@ public final class DateTimeBuiltins extends PythonBuiltins {
     public abstract static class IsoFormatNode extends PythonTernaryBuiltinNode {
 
         @Specialization
-        static TruffleString isoFormat(VirtualFrame frame, PDateTime self, Object separatorObject, Object timespecObject,
+        static TruffleString isoFormat(VirtualFrame frame, Object self, Object separatorObject, Object timespecObject,
                         @Bind Node inliningTarget,
+                        @Cached DateTimeNodes.TzInfoNode tzInfoNode,
                         @Cached("createFor($node)") IndirectCallData.BoundaryCallData boundaryCallData) {
             Object saved = ExecutionContext.BoundaryCallContext.enter(frame, boundaryCallData);
             try {
-                return isoFormatBoundary(self, separatorObject, timespecObject, inliningTarget);
+                return isoFormatBoundary(self, separatorObject, timespecObject, inliningTarget, tzInfoNode.execute(inliningTarget, self));
             } finally {
                 // A Python method call (using DatetimeModuleBuiltins.callUtcOffset)
                 // should be connected to a current node.
@@ -2988,7 +3095,8 @@ public final class DateTimeBuiltins extends PythonBuiltins {
         }
 
         @TruffleBoundary
-        private static TruffleString isoFormatBoundary(PDateTime self, Object separatorObject, Object timespecObject, Node inliningTarget) {
+        private static TruffleString isoFormatBoundary(Object selfObj, Object separatorObject, Object timespecObject, Node inliningTarget, Object tzInfo) {
+            DateTimeValue self = TemporalValueNodes.GetDateTimeValue.executeUncached(inliningTarget, selfObj);
             var builder = new StringBuilder();
 
             String dateSection = PythonUtils.formatJString("%04d-%02d-%02d", self.year, self.month, self.day);
@@ -3078,7 +3186,7 @@ public final class DateTimeBuiltins extends PythonBuiltins {
                                     ErrorMessages.UNKNOWN_TIMESPEC_VALUE);
             }
 
-            Object utcOffsetString = DatetimeModuleBuiltins.formatUtcOffset(self.tzInfo, self, true, inliningTarget);
+            Object utcOffsetString = DatetimeModuleBuiltins.formatUtcOffset(tzInfo, selfObj, true, inliningTarget);
             builder.append(utcOffsetString);
 
             return TruffleString.FromJavaStringNode.getUncached().execute(builder.toString(), TS_ENCODING);
@@ -3091,8 +3199,9 @@ public final class DateTimeBuiltins extends PythonBuiltins {
 
         @Specialization
         @TruffleBoundary
-        static TruffleString cTime(PDateTime self) {
-            LocalDateTime localDateTime = LocalDateTime.of(self.year, self.month, self.day, self.hour, self.minute, self.second);
+        static TruffleString cTime(Object selfObj) {
+            DateTimeValue self = TemporalValueNodes.GetDateTimeValue.executeUncached(null, selfObj);
+            LocalDateTime localDateTime = self.toLocalDateTime();
             DateTimeFormatter formatter = DateTimeFormatter.ofPattern("EEE LLL ppd HH:mm:ss yyyy");
             String ctime = localDateTime.format(formatter);
             return TruffleString.FromJavaStringNode.getUncached().execute(ctime, TS_ENCODING);
@@ -3110,12 +3219,13 @@ public final class DateTimeBuiltins extends PythonBuiltins {
         }
 
         @Specialization
-        static TruffleString strftime(VirtualFrame frame, PDateTime self, TruffleString format,
+        static TruffleString strftime(VirtualFrame frame, Object self, TruffleString format,
                         @Bind Node inliningTarget,
+                        @Cached DateTimeNodes.TzInfoNode tzInfoNode,
                         @Cached("createFor($node)") IndirectCallData.BoundaryCallData boundaryCallData) {
             Object saved = ExecutionContext.BoundaryCallContext.enter(frame, boundaryCallData);
             try {
-                return strftimeBoundary(self, format, inliningTarget);
+                return strftimeBoundary(self, format, inliningTarget, tzInfoNode.execute(inliningTarget, self));
             } finally {
                 // A Python method call (using PyObjectCallMethodObjArgs and
                 // DatetimeModuleBuiltins.callUtcOffset) should be connected to a
@@ -3125,7 +3235,8 @@ public final class DateTimeBuiltins extends PythonBuiltins {
         }
 
         @TruffleBoundary
-        private static TruffleString strftimeBoundary(PDateTime self, TruffleString format, Node inliningTarget) {
+        private static TruffleString strftimeBoundary(Object selfObj, TruffleString format, Node inliningTarget, Object tzInfo) {
+            DateTimeValue self = TemporalValueNodes.GetDateTimeValue.executeUncached(inliningTarget, selfObj);
             // Reuse time.strftime(format, time_tuple) method.
 
             // construct time_tuple
@@ -3134,7 +3245,7 @@ public final class DateTimeBuiltins extends PythonBuiltins {
             int dayOfYear = localDate.getDayOfYear();
             int[] timeTuple = new int[]{self.year, self.month, self.day, self.hour, self.minute, self.second, dayOfWeek, dayOfYear, -1};
 
-            String formatPreprocessed = preprocessFormat(format, self, inliningTarget);
+            String formatPreprocessed = preprocessFormat(format, self, selfObj, inliningTarget, tzInfo);
 
             return TimeModuleBuiltins.StrfTimeNode.format(formatPreprocessed, timeTuple, TruffleString.FromJavaStringNode.getUncached());
         }
@@ -3142,7 +3253,7 @@ public final class DateTimeBuiltins extends PythonBuiltins {
         // The datetime.datetime.strftime() method supports some extra formatters - %f, %z, %:z,
         // and %Z so handle them here.
         // CPython: wrap_strftime()
-        private static String preprocessFormat(TruffleString tsformat, PDateTime self, Node inliningTarget) {
+        private static String preprocessFormat(TruffleString tsformat, DateTimeValue self, Object selfObj, Node inliningTarget, Object tzInfo) {
             String format = tsformat.toString();
             StringBuilder builder = new StringBuilder();
             int i = 0;
@@ -3165,13 +3276,13 @@ public final class DateTimeBuiltins extends PythonBuiltins {
                 char c = format.charAt(p + 1);
 
                 if (c == 'z') {
-                    Object utcOffsetString = DatetimeModuleBuiltins.formatUtcOffset(self.tzInfo, self, false, inliningTarget);
+                    Object utcOffsetString = DatetimeModuleBuiltins.formatUtcOffset(tzInfo, selfObj, false, inliningTarget);
                     builder.append(utcOffsetString);
                     i = p + 2;
                 } else if (c == 'Z') {
-                    if (self.tzInfo != null) {
+                    if (tzInfo != null) {
                         // call tzname()
-                        Object tzNameObject = PyObjectCallMethodObjArgs.executeUncached(self.tzInfo, T_TZNAME, self);
+                        Object tzNameObject = PyObjectCallMethodObjArgs.executeUncached(tzInfo, T_TZNAME, selfObj);
 
                         // ignore None value
                         if (tzNameObject != PNone.NONE) {
@@ -3202,7 +3313,7 @@ public final class DateTimeBuiltins extends PythonBuiltins {
 
                     char d = format.charAt(p + 2);
                     if (d == 'z') {
-                        Object utcOffsetString = DatetimeModuleBuiltins.formatUtcOffset(self.tzInfo, self, true, inliningTarget);
+                        Object utcOffsetString = DatetimeModuleBuiltins.formatUtcOffset(tzInfo, selfObj, true, inliningTarget);
                         builder.append(utcOffsetString);
 
                         i = p + 3;
@@ -3218,13 +3329,13 @@ public final class DateTimeBuiltins extends PythonBuiltins {
     }
 
     @TruffleBoundary
-    private static LocalDateTime subtractOffsetFromDateTime(PDateTime self, PTimeDelta offset) {
-        return toLocalDateTime(self).minusDays(offset.days).minusSeconds(offset.seconds).minusNanos(offset.microseconds * 1_000L);
+    private static LocalDateTime subtractOffsetFromDateTime(DateTimeValue self, PTimeDelta offset) {
+        return self.toLocalDateTime().minusDays(offset.days).minusSeconds(offset.seconds).minusNanos(offset.microseconds * 1_000L);
     }
 
     @TruffleBoundary
     private static LocalDateTime toLocalDateTime(PDateTime dateTime) {
-        return LocalDateTime.of(dateTime.year, dateTime.month, dateTime.day, dateTime.hour, dateTime.minute, dateTime.second, dateTime.microsecond * 1_000);
+        return DateTimeValue.of(dateTime).toLocalDateTime();
     }
 
     private static Object toPDateTime(LocalDateTime local, Object tzInfo, int fold, Node inliningTarget, Object cls) {
@@ -3258,6 +3369,10 @@ public final class DateTimeBuiltins extends PythonBuiltins {
                         local.getNano() / 1_000,
                         tzInfo,
                         fold);
+    }
+
+    private static Object getResultDateTimeType(Object selfObj, Node inliningTarget, IsForeignObjectNode isForeignObjectNode, GetClassNode getClassNode) {
+        return isForeignObjectNode.execute(inliningTarget, selfObj) ? PythonBuiltinClassType.PDateTime : getClassNode.execute(inliningTarget, selfObj);
     }
 
     /**

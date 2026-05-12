@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -52,7 +52,10 @@ def find_rootdir():
     cur_dir = Path(__file__).parent
     while cur_dir.name != 'graalpython':
         cur_dir = cur_dir.parent
-    rootdir = cur_dir.parent / "mxbuild" / "cpyexts"
+    if (cur_dir / "mx.graalpython").exists():
+        rootdir = cur_dir / "mxbuild" / "cpyexts"
+    else:
+        rootdir = cur_dir.parent / "mxbuild" / "cpyexts"
     rootdir.mkdir(parents=True, exist_ok=True)
     return rootdir
 
@@ -60,37 +63,67 @@ def find_rootdir():
 DIR = find_rootdir()
 
 
-def get_setuptools(setuptools='setuptools==67.6.1'):
+def _venv_python(venv_dir: Path) -> Path:
+    if sys.platform.startswith('win32'):
+        return venv_dir / 'Scripts' / 'python.exe'
+    return venv_dir / 'bin' / 'python3'
+
+
+def _venv_site_packages(venv_dir: Path) -> Path:
+    existing_site_packages = list(venv_dir.glob("lib/python*/site-packages"))
+    if len(existing_site_packages) == 1:
+        return existing_site_packages[0]
+    if sys.platform.startswith('win32'):
+        return venv_dir / 'Lib' / 'site-packages'
+    return venv_dir / 'lib' / f'python{sys.version_info.major}.{sys.version_info.minor}' / 'site-packages'
+
+
+def _package_present(site_packages_dir: Path, package: str, version: str) -> bool:
+    if os.path.isdir(site_packages_dir / f'{package}-{version}.dist-info'):
+        return True
+    normalized = package.replace('-', '_')
+    return os.path.isdir(site_packages_dir / normalized)
+
+
+def ensure_packages(**package_specs):
+    import site
+    package_names = "-".join(package_specs.keys())
+    venv_dir = find_rootdir() / f'{sys.implementation.name}-{package_names}-venv'
+    py_executable = _venv_python(venv_dir)
+    site_packages_dir = _venv_site_packages(venv_dir)
+    if any(not _package_present(site_packages_dir, p, v) for p, v in package_specs.items()):
+        import subprocess
+        package_specs = [f'{p}=={v}' for p, v in package_specs.items()]
+        print(f'installing {package_specs} in {venv_dir}')
+        system_python = install_venv(venv_dir)
+        site_packages_dir = _venv_site_packages(venv_dir)
+        extra_args = []
+        if system_python or sys.implementation.name != "graalpy":
+            pass
+        elif __graalpython__.is_bytecode_dsl_interpreter:
+            extra_args = ['--vm.Dpython.EnableBytecodeDSLInterpreter=true']
+        else:
+            extra_args = ['--vm.Dpython.EnableBytecodeDSLInterpreter=false']
+        subprocess.run([py_executable, *extra_args, "-m", "pip", "install", *package_specs], check=True)
+        print(f'{package_specs} installed in {venv_dir}')
+
+    pyvenv_site = str(site_packages_dir)
+    if os.path.normcase(os.path.normpath(pyvenv_site)) not in {os.path.normcase(os.path.normpath(entry)) for entry in sys.path}:
+        site.addsitedir(pyvenv_site)
+
+
+def get_setuptools(setuptools='67.6.1'):
     """
     distutils is not part of std library since python 3.12
     we rely on distutils to pick the toolchain for the underlying system
     and build the c extension tests.
     """
-    import site
-    setuptools_path = find_rootdir() / ('%s-setuptools-venv' % sys.implementation.name)
-
-    if not os.path.isdir(setuptools_path / 'setuptools'):
-        import subprocess
-        print('installing setuptools in %s' % setuptools_path)
-        system_python = install_venv(setuptools_path)
-        if sys.platform.startswith('win32'):
-            py_executable = setuptools_path / 'Scripts' / 'python.exe'
-        else:
-            py_executable = setuptools_path / 'bin' / 'python3'
-        extra_args = []
-        if sys.implementation.name == "graalpy" and not system_python and __graalpython__.is_bytecode_dsl_interpreter:
-            extra_args = ['--vm.Dpython.EnableBytecodeDSLInterpreter=true']
-        subprocess.run([py_executable, *extra_args, "-m", "pip", "install", "--target", str(setuptools_path), setuptools], check=True)
-        print('setuptools is installed in %s' % setuptools_path)
-
-    pyvenv_site = str(setuptools_path)
-    if pyvenv_site not in site.getsitepackages():
-        site.addsitedir(pyvenv_site)
+    ensure_packages(setuptools=setuptools)
 
 
 def install_venv(venv_path: Path) -> bool:
     """Installs a virtual environment at the given path."""
-    if not sys.executable:
+    if not sys.executable or (sys.platform.startswith('win32') and sys.implementation.name == "graalpy"):
         # When running in a PolyBench benchmark context sys.executable is unset
         # And thus we must defer to the system's python
         # Deferring to the system's python is fine as it will only be used to install setuptools
@@ -167,7 +200,8 @@ def ccompile(self, name, check_duplicate_name=True):
     # Note: It could be that the C source file's checksum didn't change but someone
     # manually deleted the shared library file.
     if available_checksum != cur_checksum or not lib_file.exists():
-        os.makedirs(build_dir, exist_ok=True)
+        shutil.rmtree(build_dir, ignore_errors=True)
+        os.makedirs(build_dir)
         # MSVC linker doesn't like absolute paths in some parameters, so just run from the build dir
         old_cwd = os.getcwd()
         os.chdir(build_dir)

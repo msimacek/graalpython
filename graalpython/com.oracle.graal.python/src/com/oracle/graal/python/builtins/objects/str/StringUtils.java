@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -48,9 +48,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 
-import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
-import com.oracle.truffle.api.dsl.Fallback;
-import org.graalvm.nativeimage.ImageInfo;
 import org.graalvm.shadowed.com.ibm.icu.lang.UCharacter;
 import org.graalvm.shadowed.com.ibm.icu.lang.UCharacterCategory;
 import org.graalvm.shadowed.com.ibm.icu.lang.UProperty;
@@ -69,6 +66,7 @@ import com.oracle.truffle.api.strings.TruffleStringBuilder;
 import com.oracle.truffle.api.strings.TruffleStringBuilder.AppendCodePointNode;
 import com.oracle.truffle.api.strings.TruffleStringBuilder.AppendLongNumberNode;
 import com.oracle.truffle.api.strings.TruffleStringBuilder.AppendStringNode;
+import com.oracle.truffle.api.strings.TruffleStringBuilderUTF32;
 import com.oracle.truffle.api.strings.TruffleStringIterator;
 import com.oracle.truffle.regex.chardata.UnicodeCharacterAliases;
 
@@ -157,13 +155,13 @@ public final class StringUtils {
         return isUnicodeWhitespace(ch);
     }
 
-    public static TruffleString strip(TruffleString str, StripKind stripKind, TruffleString.CodePointLengthNode codePointLengthNode, TruffleString.CodePointAtIndexNode codePointAtIndexNode,
+    public static TruffleString strip(TruffleString str, StripKind stripKind, TruffleString.CodePointLengthNode codePointLengthNode, TruffleString.CodePointAtIndexUTF32Node codePointAtIndexNode,
                     TruffleString.SubstringNode substringNode) {
         int i = 0;
         int len = codePointLengthNode.execute(str, TS_ENCODING);
         if (stripKind != StripKind.RIGHT) {
             while (i < len) {
-                int cp = codePointAtIndexNode.execute(str, i, TS_ENCODING);
+                int cp = codePointAtIndexNode.execute(str, i);
                 if (!isSpace(cp)) {
                     break;
                 }
@@ -175,7 +173,7 @@ public final class StringUtils {
         if (stripKind != StripKind.LEFT) {
             j--;
             while (j >= i) {
-                int cp = codePointAtIndexNode.execute(str, j, TS_ENCODING);
+                int cp = codePointAtIndexNode.execute(str, j);
                 if (!isSpace(cp)) {
                     break;
                 }
@@ -188,7 +186,7 @@ public final class StringUtils {
     }
 
     public static TruffleString strip(TruffleString str, TruffleString chars, StripKind stripKind, TruffleString.CodePointLengthNode codePointLengthNode,
-                    TruffleString.CodePointAtIndexNode codePointAtIndexNode, TruffleString.IndexOfCodePointNode indexOfCodePointNode, TruffleString.SubstringNode substringNode) {
+                    TruffleString.CodePointAtIndexUTF32Node codePointAtIndexNode, TruffleString.IndexOfCodePointNode indexOfCodePointNode, TruffleString.SubstringNode substringNode) {
         int i = 0;
         int len = codePointLengthNode.execute(str, TS_ENCODING);
         int charsLen = codePointLengthNode.execute(chars, TS_ENCODING);
@@ -196,7 +194,7 @@ public final class StringUtils {
         // to avoid the linear search in chars
         if (stripKind != StripKind.RIGHT) {
             while (i < len) {
-                int cp = codePointAtIndexNode.execute(str, i, TS_ENCODING);
+                int cp = codePointAtIndexNode.execute(str, i);
                 if (indexOfCodePointNode.execute(chars, cp, 0, charsLen, TS_ENCODING) < 0) {
                     break;
                 }
@@ -208,7 +206,7 @@ public final class StringUtils {
         if (stripKind != StripKind.LEFT) {
             j--;
             while (j >= i) {
-                int cp = codePointAtIndexNode.execute(str, j, TS_ENCODING);
+                int cp = codePointAtIndexNode.execute(str, j);
                 if (indexOfCodePointNode.execute(chars, cp, 0, charsLen, TS_ENCODING) < 0) {
                     break;
                 }
@@ -222,17 +220,6 @@ public final class StringUtils {
 
     @TruffleBoundary
     public static boolean isPrintable(int codepoint) {
-        if (ImageInfo.inImageBuildtimeCode()) {
-            // Executing ICU4J at image build time causes issues with runtime/build time
-            // initialization
-            assert codepoint < 0x100;
-            return codepoint >= 32;
-        }
-        return isPrintableICU(codepoint);
-    }
-
-    @TruffleBoundary
-    private static boolean isPrintableICU(int codepoint) {
         // ICU's definition of printability is different from CPython, so we cannot use
         // UCharacter.isPrintable
         int category = UCharacter.getType(codepoint);
@@ -253,32 +240,16 @@ public final class StringUtils {
 
     @TruffleBoundary
     public static String toLowerCase(String self) {
-        if (ImageInfo.inImageBuildtimeCode()) {
-            // Avoid initializing ICU4J in image build
-            return self.toLowerCase();
-        }
         return UCharacter.toLowerCase(Locale.ROOT, self);
     }
 
     @TruffleBoundary
     public static String toUpperCase(String str) {
-        if (ImageInfo.inImageBuildtimeCode()) {
-            // Avoid initializing ICU4J in image build
-            return str.toUpperCase();
-        }
         return UCharacter.toUpperCase(Locale.ROOT, str);
     }
 
     @TruffleBoundary
     public static boolean isAlnum(int codePoint) {
-        if (ImageInfo.inImageBuildtimeCode()) {
-            // Avoid initializing ICU4J in image build
-            return Character.isLetterOrDigit(codePoint);
-        }
-        return isAlnumICU(codePoint);
-    }
-
-    private static boolean isAlnumICU(int codePoint) {
         if (UCharacter.isLetter(codePoint) || UCharacter.isDigit(codePoint) || UCharacter.hasBinaryProperty(codePoint, UProperty.NUMERIC_TYPE)) {
             return true;
         }
@@ -336,22 +307,12 @@ public final class StringUtils {
 
         @TruffleBoundary
         static boolean isIdentifierStart(int codePoint) {
-            if (ImageInfo.inImageBuildtimeCode()) {
-                // Avoid initializing ICU4J at image build time
-                return Character.isUnicodeIdentifierStart(codePoint);
-            } else {
-                return UCharacter.hasBinaryProperty(codePoint, UProperty.XID_START);
-            }
+            return UCharacter.hasBinaryProperty(codePoint, UProperty.XID_START);
         }
 
         @TruffleBoundary
         static boolean isIdentifierPart(int codePoint) {
-            if (ImageInfo.inImageBuildtimeCode()) {
-                // Avoid initializing ICU4J at image build time
-                return Character.isUnicodeIdentifierPart(codePoint);
-            } else {
-                return UCharacter.hasBinaryProperty(codePoint, UProperty.XID_CONTINUE);
-            }
+            return UCharacter.hasBinaryProperty(codePoint, UProperty.XID_CONTINUE);
         }
     }
 
@@ -365,7 +326,7 @@ public final class StringUtils {
         if (!it.hasNext()) {
             return first;
         }
-        TruffleStringBuilder sb = TruffleStringBuilder.create(TS_ENCODING);
+        TruffleStringBuilderUTF32 sb = TruffleStringBuilder.createUTF32();
         sb.appendStringUncached(first);
         while (it.hasNext()) {
             sb.appendStringUncached(delimiter);
@@ -410,7 +371,7 @@ public final class StringUtils {
         if (args.length == 2) {
             return args[0].concatUncached(args[1], TS_ENCODING, false);
         }
-        TruffleStringBuilder sb = TruffleStringBuilder.create(TS_ENCODING);
+        TruffleStringBuilderUTF32 sb = TruffleStringBuilder.createUTF32();
         for (TruffleString arg : args) {
             sb.appendStringUncached(arg);
         }
@@ -457,7 +418,7 @@ public final class StringUtils {
                         @Shared("cpAtByteIndex") @Cached TruffleString.CodePointAtByteIndexNode codePointAtByteIndexNode,
                         @Shared("byteLenOfCP") @Cached TruffleString.ByteLengthOfCodePointNode byteLengthOfCodePointNode,
                         @Shared("js2ts") @Cached TruffleString.FromJavaStringNode fromJavaStringNode) {
-            TruffleStringBuilder sb = TruffleStringBuilder.create(TS_ENCODING);
+            TruffleStringBuilderUTF32 sb = TruffleStringBuilder.createUTF32();
             int i = 0;
             int len = format.byteLength(TS_ENCODING);
             int nextArg = 0;
@@ -585,27 +546,13 @@ public final class StringUtils {
         }
     }
 
-    /**
-     * Like {@link com.oracle.truffle.api.strings.TruffleString.EqualNode} but with the proper
-     * {@link InliningCutoff} since {@link com.oracle.truffle.api.strings.TruffleString.EqualNode}
-     * is too big for host inlining, at least when used in node guards.
-     */
-    @GenerateInline
-    @GenerateCached(false)
-    @GenerateUncached
-    public abstract static class EqualNode extends Node {
-        public abstract boolean execute(Node inliningTarget, TruffleString left, TruffleString right);
+    public static int codepointIndexToByteIndex(int codepointIndex) {
+        assert TS_ENCODING == TruffleString.Encoding.UTF_32 : "must be adapted when switching to a different encoding";
+        return codepointIndex << 2;
+    }
 
-        @Specialization(guards = "left == right")
-        static boolean doIdentity(TruffleString left, TruffleString right) {
-            return true;
-        }
-
-        @InliningCutoff
-        @Fallback
-        static boolean doEquality(TruffleString left, TruffleString right,
-                        @Cached TruffleString.EqualNode equalNode) {
-            return equalNode.execute(left, right, TS_ENCODING);
-        }
+    public static int byteIndexToCodepointIndex(int byteIndex) {
+        assert TS_ENCODING == TruffleString.Encoding.UTF_32 : "must be adapted when switching to a different encoding";
+        return byteIndex >> 2;
     }
 }

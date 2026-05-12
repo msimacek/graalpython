@@ -1,4 +1,4 @@
-# Copyright (c) 2020, 2021, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -39,6 +39,7 @@
 import sys
 import unittest
 from math import atan2
+import math
 
 def test_create():
     c = 4 + 4j
@@ -89,6 +90,46 @@ def test_sub():
     assert (2 - c2) == complex(0, -2)
     assert (c2 - 1.5) == complex(0.5, 2)
     assert (1.5 - c2) == complex(-0.5, -2)
+
+
+def test_mixed_real_complex_zero_signs():
+    z = complex(0.0, -0.0)
+
+    def add_int_local():
+        x = 0
+        return z + x, x + z
+
+    def add_float_local():
+        x = 0.0
+        return z + x, x + z
+
+    def add_bool_local():
+        x = False
+        return z + x, x + z
+
+    for left, right in (add_int_local(), add_float_local(), add_bool_local()):
+        assert left == right
+        assert math.copysign(1.0, left.imag) == 1.0
+        assert math.copysign(1.0, right.imag) == 1.0
+
+    def sub_int_local():
+        x = 0
+        return x - z, z - x
+
+    def sub_float_local():
+        x = 0.0
+        return x - z, z - x
+
+    def sub_bool_local():
+        x = False
+        return x - z, z - x
+
+    # Subtraction is not commutative, but sign handling should follow CPython.
+    for left, right in (sub_int_local(), sub_float_local(), sub_bool_local()):
+        assert left == 0j
+        assert right == -0j
+        assert math.copysign(1.0, left.imag) == 1.0
+        assert math.copysign(1.0, right.imag) == -1.0
 
 
 def test_div():
@@ -187,7 +228,7 @@ def test_createFromObjects():
     c = complex(CP1(5+5j), 7+7j)
     assert c == complex(-2, 12)
     assert type(c) == complex
-    
+
     c = complex(CP1(5+5j), CP1(7+7j))
     assert c == complex(-2, 12)
     assert type(c) == complex
@@ -203,7 +244,7 @@ def test_createFromObjects():
     c = CP1(CP1(5+5j), 7+7j)
     assert c == complex(-2, 12)
     assert type(c) == CP1
-    
+
     c = CP1(CP1(5+5j), CP1(7+7j))
     assert c == complex(-2, 12)
     assert type(c) == CP1
@@ -215,7 +256,7 @@ def test_createFromObjects():
     c = CP1(CP2(5+5j), 7+7j)
     assert c == complex(-7, 49)
     assert type(c) == CP1
-    
+
     c = CP1(CP2(5+5j), CP2(7+7j))
     assert c == complex(-7, 49)
     assert type(c) == CP1
@@ -227,7 +268,7 @@ def test_createFromObjects():
     c = complex(CP2(5+5j), 7+7j)
     assert c == complex(-7, 49)
     assert type(c) == complex
-    
+
     c = complex(CP2(5+5j), CP2(7+7j))
     assert c == complex(-7, 49)
     assert type(c) == complex
@@ -243,7 +284,7 @@ def test_createFromObjects():
     c = CP2(CP2(5+5j), 7+7j)
     assert c == complex(-7, 49)
     assert type(c) == CP2
-    
+
     c = CP2(CP2(5+5j), CP2(7+7j))
     assert c == complex(-7, 49)
     assert type(c) == CP2
@@ -251,6 +292,17 @@ def test_createFromObjects():
     assert complex(CP3()) == complex(6.0)
     if sys.version_info >= (3, 8, 0):
         assert complex(CP4()) == complex(123)
+
+
+def test_complex_subclass_without_dunder_complex_uses_fallback():
+    class SubComplex(complex):
+        pass
+
+    value = SubComplex(2 + 3j)
+    result = complex(value)
+
+    assert result == 2 + 3j
+    assert type(result) is complex
 
 class ComplexTest(unittest.TestCase):
 
@@ -442,7 +494,7 @@ class ComplexTest(unittest.TestCase):
                 return None
 
         self.assertEqual(complex(complex0(1j)), 42j)
-        # TODO we are not able to throw warning now. 
+        # TODO we are not able to throw warning now.
 #        with self.assertWarns(DeprecationWarning):
         self.assertEqual(complex(complex1(1j)), 2j)
         self.assertRaises(TypeError, complex, complex2(1j))

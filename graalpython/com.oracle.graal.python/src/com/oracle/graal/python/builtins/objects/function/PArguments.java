@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -25,10 +25,13 @@
  */
 package com.oracle.graal.python.builtins.objects.function;
 
+import com.oracle.graal.python.builtins.objects.code.PCode;
 import com.oracle.graal.python.builtins.objects.frame.PFrame;
+import com.oracle.graal.python.builtins.objects.module.PythonModule;
 import com.oracle.graal.python.builtins.objects.object.PythonObject;
 import com.oracle.graal.python.nodes.argument.CreateArgumentsNode;
 import com.oracle.graal.python.runtime.exception.PException;
+import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.exception.AbstractTruffleException;
 import com.oracle.truffle.api.frame.Frame;
 
@@ -37,7 +40,7 @@ import com.oracle.truffle.api.frame.Frame;
  * <ul>
  * <li>{@code SPECIAL_ARGUMENT (Object)}</li>
  * <li>{@code INDEX_GLOBALS_ARGUMENT (PythonObject)}</li>
- * <li>{@code INDEX_FUNCTION_OBJECT (PFunction)}</li>
+ * <li>{@code INDEX_FUNCTION_OR_CODE_OBJECT (PFunction)}</li>
  * <li>{@code INDEX_CALLER_FRAME_INFO (PFrame.Reference)}</li>
  * <li>{@code INDEX_CURRENT_FRAME_INFO (PFrame.Reference)}</li>
  * <li>{@code INDEX_CURRENT_EXCEPTION (PException)}</li>
@@ -56,11 +59,19 @@ import com.oracle.truffle.api.frame.Frame;
 public final class PArguments {
     private static final int INDEX_SPECIAL_ARGUMENT = 0;
     private static final int INDEX_GLOBALS_ARGUMENT = 1;
-    private static final int INDEX_FUNCTION_OBJECT = 2;
+    private static final int INDEX_FUNCTION_OR_CODE_OBJECT = 2;
     private static final int INDEX_CALLER_FRAME_INFO = 3;
     private static final int INDEX_CURRENT_FRAME_INFO = 4;
     private static final int INDEX_CURRENT_EXCEPTION = 5;
     public static final int USER_ARGUMENTS_OFFSET = 6;
+
+    public static boolean assertIsPythonFrame(Frame frame) {
+        assert frame != null;
+        Object[] frameArgs = frame.getArguments();
+        assert frameArgs.length >= USER_ARGUMENTS_OFFSET : frameArgs.length;
+        assert frameArgs[INDEX_CURRENT_FRAME_INFO] instanceof PFrame.Reference : frameArgs[INDEX_CURRENT_FRAME_INFO];
+        return true;
+    }
 
     public static boolean isPythonFrame(Frame frame) {
         return frame != null && isPythonFrame(frame.getArguments());
@@ -70,9 +81,11 @@ public final class PArguments {
         return frameArgs.length >= USER_ARGUMENTS_OFFSET && frameArgs[INDEX_CURRENT_FRAME_INFO] instanceof PFrame.Reference;
     }
 
-    public static Object[] withGlobals(PythonObject globals) {
+    public static Object[] withGlobals(PCode code, PythonModule globals) {
+        CompilerAsserts.neverPartOfCompilation();
         Object[] arguments = create();
-        setGlobals(arguments, globals);
+        setGlobals(arguments, globals.getDict());
+        setCodeObject(arguments, code);
         return arguments;
     }
 
@@ -189,12 +202,42 @@ public final class PArguments {
         arguments[INDEX_CURRENT_EXCEPTION] = exc;
     }
 
+    public static Object getFunctionOrCodeObject(Object[] arguments) {
+        return arguments[INDEX_FUNCTION_OR_CODE_OBJECT];
+    }
+
+    public static Object getFunctionOrCodeObject(Frame frame) {
+        return getFunctionOrCodeObject(frame.getArguments());
+    }
+
     public static PFunction getFunctionObject(Object[] arguments) {
-        return (PFunction) arguments[INDEX_FUNCTION_OBJECT];
+        return (PFunction) arguments[INDEX_FUNCTION_OR_CODE_OBJECT];
+    }
+
+    public static PFunction getFunctionObject(Frame frame) {
+        return getFunctionObject(frame.getArguments());
+    }
+
+    public static PCode getCodeObject(Object[] arguments) {
+        Object functionOrCodeObject = getFunctionOrCodeObject(arguments);
+        if (functionOrCodeObject instanceof PFunction function) {
+            return function.getCode();
+        } else if (functionOrCodeObject instanceof PCode code) {
+            return code;
+        }
+        return null;
+    }
+
+    public static PCode getCodeObject(Frame frame) {
+        return getCodeObject(frame.getArguments());
     }
 
     public static void setFunctionObject(Object[] arguments, PFunction function) {
-        arguments[INDEX_FUNCTION_OBJECT] = function;
+        arguments[INDEX_FUNCTION_OR_CODE_OBJECT] = function;
+    }
+
+    public static void setCodeObject(Object[] arguments, PCode code) {
+        arguments[INDEX_FUNCTION_OR_CODE_OBJECT] = code;
     }
 
     public static void setArgument(Object[] arguments, int index, Object value) {

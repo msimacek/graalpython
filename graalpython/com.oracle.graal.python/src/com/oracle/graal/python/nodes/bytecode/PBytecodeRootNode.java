@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -143,8 +143,8 @@ import com.oracle.graal.python.lib.PyNumberRshiftNode;
 import com.oracle.graal.python.lib.PyNumberSubtractNode;
 import com.oracle.graal.python.lib.PyNumberTrueDivideNode;
 import com.oracle.graal.python.lib.PyNumberXorNode;
-import com.oracle.graal.python.lib.PyObjectAsciiNode;
-import com.oracle.graal.python.lib.PyObjectAsciiNodeGen;
+import com.oracle.graal.python.lib.PyObjectAsciiAsObjectNode;
+import com.oracle.graal.python.lib.PyObjectAsciiAsObjectNodeGen;
 import com.oracle.graal.python.lib.PyObjectDelItem;
 import com.oracle.graal.python.lib.PyObjectDelItemNodeGen;
 import com.oracle.graal.python.lib.PyObjectGetAttr;
@@ -237,7 +237,6 @@ import com.oracle.graal.python.runtime.sequence.storage.IntSequenceStorage;
 import com.oracle.graal.python.runtime.sequence.storage.LongSequenceStorage;
 import com.oracle.graal.python.runtime.sequence.storage.ObjectSequenceStorage;
 import com.oracle.graal.python.runtime.sequence.storage.SequenceStorage;
-import com.oracle.graal.python.util.LazySource;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.Assumption;
 import com.oracle.truffle.api.CompilerAsserts;
@@ -247,6 +246,7 @@ import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.CompilerDirectives.ValueType;
 import com.oracle.truffle.api.HostCompilerDirectives.BytecodeInterpreterSwitch;
 import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
+import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
@@ -401,8 +401,8 @@ public final class PBytecodeRootNode extends PRootNode implements BytecodeOSRNod
     private static final NodeSupplier<PyObjectStrAsObjectNode> NODE_STR = PyObjectStrAsObjectNode::create;
     private static final PyObjectReprAsObjectNode UNCACHED_REPR = PyObjectReprAsObjectNode.getUncached();
     private static final NodeSupplier<PyObjectReprAsObjectNode> NODE_REPR = PyObjectReprAsObjectNode::create;
-    private static final PyObjectAsciiNode UNCACHED_ASCII = PyObjectAsciiNode.getUncached();
-    private static final NodeSupplier<PyObjectAsciiNode> NODE_ASCII = PyObjectAsciiNode::create;
+    private static final PyObjectAsciiAsObjectNode UNCACHED_ASCII = PyObjectAsciiAsObjectNode.getUncached();
+    private static final NodeSupplier<PyObjectAsciiAsObjectNode> NODE_ASCII = PyObjectAsciiAsObjectNode::create;
     private static final NodeSupplier<FormatNode> NODE_FORMAT = FormatNode::create;
     private static final NodeSupplier<SendNode> NODE_SEND = SendNode::create;
     private static final NodeSupplier<ThrowNode> NODE_THROW = ThrowNode::create;
@@ -549,7 +549,7 @@ public final class PBytecodeRootNode extends PRootNode implements BytecodeOSRNod
     final int classcellIndex;
 
     private final BytecodeCodeUnit co;
-    private final LazySource lazySource;
+    private final Source source;
     private SourceSection sourceSection;
     // For deferred deprecation warnings
     private final ParserCallbacksImpl parserCallbacks;
@@ -663,15 +663,25 @@ public final class PBytecodeRootNode extends PRootNode implements BytecodeOSRNod
     }
 
     @TruffleBoundary
-    public static PBytecodeRootNode create(PythonLanguage language, BytecodeCodeUnit co, LazySource lazySource, boolean internal) {
-        return create(language, co, lazySource, internal, null);
+    public static PBytecodeRootNode create(PythonLanguage language, BytecodeCodeUnit co, Source source, boolean internal) {
+        return create(language, co, source, internal, null);
     }
 
     @TruffleBoundary
-    public static PBytecodeRootNode create(PythonLanguage language, BytecodeCodeUnit co, LazySource lazySource, boolean internal, ParserCallbacksImpl parserCallbacks) {
+    public static RootNode createMaybeGenerator(PythonLanguage language, BytecodeCodeUnit co, Source source, boolean internal) {
+        PBytecodeRootNode bytecodeRootNode = PBytecodeRootNode.create(language, co, source, internal);
+        if (co.isGeneratorOrCoroutine()) {
+            return new PBytecodeGeneratorFunctionRootNode(language, bytecodeRootNode.getFrameDescriptor(), bytecodeRootNode, co.name);
+        } else {
+            return bytecodeRootNode;
+        }
+    }
+
+    @TruffleBoundary
+    public static PBytecodeRootNode create(PythonLanguage language, BytecodeCodeUnit co, Source source, boolean internal, ParserCallbacksImpl parserCallbacks) {
         BytecodeFrameInfo frameInfo = new BytecodeFrameInfo();
         FrameDescriptor fd = makeFrameDescriptor(co, frameInfo);
-        PBytecodeRootNode rootNode = new PBytecodeRootNode(language, fd, co.computeSignature(), co, lazySource, internal, parserCallbacks);
+        PBytecodeRootNode rootNode = new PBytecodeRootNode(language, fd, co.computeSignature(), co, source, internal, parserCallbacks);
         PythonContext context = PythonContext.get(rootNode);
         if (context != null && context.getOption(PythonOptions.EagerlyMaterializeInstrumentationNodes)) {
             rootNode.adoptChildren();
@@ -682,14 +692,14 @@ public final class PBytecodeRootNode extends PRootNode implements BytecodeOSRNod
     }
 
     @TruffleBoundary
-    private PBytecodeRootNode(PythonLanguage language, FrameDescriptor fd, Signature sign, BytecodeCodeUnit co, LazySource source, boolean internal,
+    private PBytecodeRootNode(PythonLanguage language, FrameDescriptor fd, Signature sign, BytecodeCodeUnit co, Source source, boolean internal,
                     ParserCallbacksImpl parserCallbacks) {
         super(language, fd);
         this.celloffset = co.varnames.length;
         this.freeoffset = celloffset + co.cellvars.length;
         this.stackoffset = freeoffset + co.freevars.length;
         this.bcioffset = stackoffset + co.stacksize;
-        this.lazySource = source;
+        this.source = source;
         this.internal = internal;
         this.parserCallbacks = parserCallbacks;
         this.signature = sign;
@@ -777,12 +787,12 @@ public final class PBytecodeRootNode extends PRootNode implements BytecodeOSRNod
         return co;
     }
 
-    public Source getSource() {
-        return lazySource.getSource();
+    public Source getSourceWithCharacters() {
+        return getLanguage().getOrCreateSourceWithContent(source);
     }
 
-    public LazySource getLazySource() {
-        return lazySource;
+    public Source getSource() {
+        return source;
     }
 
     public byte[] getBytecode() {
@@ -895,7 +905,7 @@ public final class PBytecodeRootNode extends PRootNode implements BytecodeOSRNod
         }
     }
 
-    private PythonLanguage getLanguage() {
+    public PythonLanguage getLanguage() {
         return getLanguage(PythonLanguage.class);
     }
 
@@ -2172,7 +2182,7 @@ public final class PBytecodeRootNode extends PRootNode implements BytecodeOSRNod
                     case OpCodesConstants.MAKE_FUNCTION: {
                         oparg |= Byte.toUnsignedInt(localBC[++bci]);
                         int flags = Byte.toUnsignedInt(localBC[++bci]);
-                        stackTop = bytecodeMakeFunction(virtualFrame, globals, stackTop, localNodes, beginBci, flags, localConsts[oparg]);
+                        stackTop = bytecodeMakeFunction(virtualFrame, globals, stackTop, localNodes, beginBci, oparg, flags, localConsts[oparg]);
                         break;
                     }
                     case OpCodesConstants.SETUP_ANNOTATIONS: {
@@ -2716,9 +2726,9 @@ public final class PBytecodeRootNode extends PRootNode implements BytecodeOSRNod
     }
 
     @BytecodeInterpreterSwitch
-    private int bytecodeMakeFunction(VirtualFrame virtualFrame, Object globals, int stackTop, Node[] localNodes, int beginBci, int flags, Object localConsts) {
+    private int bytecodeMakeFunction(VirtualFrame virtualFrame, Object globals, int stackTop, Node[] localNodes, int beginBci, int codeIndex, int flags, Object localConsts) {
         BytecodeCodeUnit codeUnit = (BytecodeCodeUnit) localConsts;
-        MakeFunctionNode makeFunctionNode = insertMakeFunctionNode(localNodes, beginBci, codeUnit);
+        MakeFunctionNode makeFunctionNode = insertMakeFunctionNode(localNodes, beginBci, codeIndex, codeUnit);
         return makeFunctionNode.execute(virtualFrame, globals, stackTop, flags);
     }
 
@@ -2899,23 +2909,25 @@ public final class PBytecodeRootNode extends PRootNode implements BytecodeOSRNod
         return null;
     }
 
-    private MakeFunctionNode insertMakeFunctionNode(Node[] localNodes, int beginBci, BytecodeCodeUnit codeUnit) {
-        return insertChildNode(localNodes, beginBci, MakeFunctionNodeGen.class, () -> MakeFunctionNode.create(getLanguage(PythonLanguage.class), codeUnit, lazySource, internal));
+    private MakeFunctionNode insertMakeFunctionNode(Node[] localNodes, int beginBci, int codeIndex, BytecodeCodeUnit codeUnit) {
+        return insertChildNode(localNodes, beginBci, MakeFunctionNodeGen.class, () -> MakeFunctionNode.create(codeIndex, codeUnit));
     }
 
     public void materializeContainedFunctionsForInstrumentation(Set<Class<? extends Tag>> materializedTags) {
         usingCachedNodes = true;
-        BytecodeCodeUnit.iterateBytecode(bytecode, (bci, op, oparg, followingArgs) -> {
-            if (op == OpCodes.MAKE_FUNCTION) {
-                BytecodeCodeUnit codeUnit = (BytecodeCodeUnit) consts[oparg];
-                MakeFunctionNode makeFunctionNode = insertMakeFunctionNode(getChildNodes(), bci, codeUnit);
-                RootNode rootNode = makeFunctionNode.getCallTarget().getRootNode();
+        PythonLanguage language = getLanguage();
+        for (int i = 0; i < co.constants.length; i++) {
+            if (co.constants[i] instanceof BytecodeCodeUnit codeUnit) {
+                RootCallTarget callTarget = language.createCachedCallTarget(
+                                l -> PBytecodeRootNode.createMaybeGenerator(language, codeUnit, getSource(), isInternal()),
+                                codeUnit);
+                RootNode rootNode = callTarget.getRootNode();
                 if (rootNode instanceof PBytecodeGeneratorFunctionRootNode) {
                     rootNode = ((PBytecodeGeneratorFunctionRootNode) rootNode).getBytecodeRootNode();
                 }
                 ((PBytecodeRootNode) rootNode).instrumentationRoot.materializeInstrumentableNodes(materializedTags);
             }
-        });
+        }
     }
 
     public Node createInstrumentationMaterializationForwarder() {
@@ -3309,7 +3321,7 @@ public final class PBytecodeRootNode extends PRootNode implements BytecodeOSRNod
                 pyFrame.setLocalTraceFun(null);
             }
         } catch (Throwable e) {
-            threadState.setTraceFun(null, getLanguage());
+            threadState.setTraceFun(null, null, getLanguage());
             throw e;
         } finally {
             if (line != -1) {
@@ -3377,7 +3389,7 @@ public final class PBytecodeRootNode extends PRootNode implements BytecodeOSRNod
             Object realResult = result == PNone.NONE ? null : result;
             pyFrame.setLocalTraceFun(realResult);
         } catch (Throwable e) {
-            threadState.setProfileFun(null, getLanguage());
+            threadState.setProfileFun(null, null, getLanguage());
             throw e;
         } finally {
             threadState.profilingStop();
@@ -3441,6 +3453,9 @@ public final class PBytecodeRootNode extends PRootNode implements BytecodeOSRNod
     }
 
     private void chainPythonExceptions(PException current, PException context) {
+        if (current.isReraised()) {
+            return;
+        }
         if (chainExceptionsNode == null) {
             CompilerDirectives.transferToInterpreterAndInvalidate();
             chainExceptionsNode = insert(ChainExceptionsNode.create());
@@ -4989,7 +5004,7 @@ public final class PBytecodeRootNode extends PRootNode implements BytecodeOSRNod
                 value = insertChildNode(localNodes, bci, UNCACHED_REPR, PyObjectReprAsObjectNodeGen.class, NODE_REPR, useCachedNodes).executeCached(virtualFrame, value);
                 break;
             case FormatOptions.FVC_ASCII:
-                value = insertChildNode(localNodes, bci, UNCACHED_ASCII, PyObjectAsciiNodeGen.class, NODE_ASCII, useCachedNodes).executeCached(virtualFrame, value);
+                value = insertChildNode(localNodes, bci, UNCACHED_ASCII, PyObjectAsciiAsObjectNodeGen.class, NODE_ASCII, useCachedNodes).executeCached(virtualFrame, value);
                 break;
             default:
                 assert type == FormatOptions.FVC_NONE;
@@ -5845,10 +5860,10 @@ public final class PBytecodeRootNode extends PRootNode implements BytecodeOSRNod
     }
 
     @ExplodeLoop
-    private static ObjectHashMap moveFromStackToSetHashMap(VirtualFrame virtualFrame, int start, int stop, ObjHashMapPutNode putNode) {
+    private static EconomicMapStorage moveFromStackToSetHashMap(VirtualFrame virtualFrame, int start, int stop, ObjHashMapPutNode putNode) {
         CompilerAsserts.partialEvaluationConstant(start);
         CompilerAsserts.partialEvaluationConstant(stop);
-        var result = new ObjectHashMap(stop - start);
+        EconomicMapStorage result = EconomicMapStorage.create(stop - start);
         for (int i = start; i < stop; i++) {
             putNode.execute(virtualFrame, result, virtualFrame.getObject(i), PNone.NONE);
             virtualFrame.clear(i);
@@ -5857,10 +5872,10 @@ public final class PBytecodeRootNode extends PRootNode implements BytecodeOSRNod
     }
 
     @ExplodeLoop
-    private static ObjectHashMap moveFromStackToDictHashMap(VirtualFrame virtualFrame, int start, int stop, ObjHashMapPutNode putNode) {
+    private static EconomicMapStorage moveFromStackToDictHashMap(VirtualFrame virtualFrame, int start, int stop, ObjHashMapPutNode putNode) {
         CompilerAsserts.partialEvaluationConstant(start);
         CompilerAsserts.partialEvaluationConstant(stop);
-        var result = new ObjectHashMap((stop - start) / 2);
+        EconomicMapStorage result = EconomicMapStorage.create((stop - start) / 2);
         for (int i = start; i + 1 < stop; i += 2) {
             putNode.execute(virtualFrame, result, virtualFrame.getObject(i), virtualFrame.getObject(i + 1));
             virtualFrame.clear(i);
@@ -5889,16 +5904,16 @@ public final class PBytecodeRootNode extends PRootNode implements BytecodeOSRNod
             case CollectionBits.KIND_SET: {
                 ObjHashMapPutNode putNode = insertChildNode(localNodes, nodeIndex, UNCACHED_OBJ_HASHMAP_PUT, ObjHashMapPutNodeGen.class, NODE_OBJ_HASHMAP_PUT,
                                 useCachedNodes);
-                ObjectHashMap storage = moveFromStackToSetHashMap(virtualFrame, stackTop - count + 1, stackTop + 1, putNode);
-                res = PFactory.createSet(getLanguage(), new EconomicMapStorage(storage, false));
+                EconomicMapStorage storage = moveFromStackToSetHashMap(virtualFrame, stackTop - count + 1, stackTop + 1, putNode);
+                res = PFactory.createSet(getLanguage(), storage);
                 break;
             }
             case CollectionBits.KIND_DICT: {
                 ObjHashMapPutNode putNode = insertChildNode(localNodes, nodeIndex, UNCACHED_OBJ_HASHMAP_PUT, ObjHashMapPutNodeGen.class, NODE_OBJ_HASHMAP_PUT,
                                 useCachedNodes);
                 assert count % 2 == 0;
-                ObjectHashMap storage = moveFromStackToDictHashMap(virtualFrame, stackTop - count + 1, stackTop + 1, putNode);
-                res = PFactory.createDict(getLanguage(), new EconomicMapStorage(storage, false));
+                EconomicMapStorage storage = moveFromStackToDictHashMap(virtualFrame, stackTop - count + 1, stackTop + 1, putNode);
+                res = PFactory.createDict(getLanguage(), storage);
                 break;
             }
             case CollectionBits.KIND_KWORDS: {
@@ -6150,11 +6165,11 @@ public final class PBytecodeRootNode extends PRootNode implements BytecodeOSRNod
     public SourceSection getSourceSection() {
         if (sourceSection != null) {
             return sourceSection;
-        } else if (!getSource().hasCharacters()) {
-            sourceSection = getSource().createUnavailableSection();
+        } else if (!getSourceWithCharacters().hasCharacters()) {
+            sourceSection = getSourceWithCharacters().createUnavailableSection();
             return sourceSection;
         } else {
-            sourceSection = co.getSourceSection(getSource());
+            sourceSection = co.getSourceSection(getSourceWithCharacters());
             return sourceSection;
         }
     }
@@ -6194,7 +6209,7 @@ public final class PBytecodeRootNode extends PRootNode implements BytecodeOSRNod
     }
 
     @Override
-    protected byte[] extractCode() {
+    protected byte[] extractCode(Node node) {
         /*
          * CPython exposes individual items of code objects, like constants, as different members of
          * the code object and the co_code attribute contains just the bytecode. It would be better
@@ -6218,7 +6233,7 @@ public final class PBytecodeRootNode extends PRootNode implements BytecodeOSRNod
          *
          * TODO We should revisit this when the AST interpreter is removed.
          */
-        return MarshalModuleBuiltins.serializeCodeUnit(null, PythonContext.get(this), co);
+        return MarshalModuleBuiltins.serializeCodeUnit(null, getLanguage(), co);
     }
 
     @Override
@@ -6229,7 +6244,7 @@ public final class PBytecodeRootNode extends PRootNode implements BytecodeOSRNod
     @Override
     protected RootNode cloneUninitialized() {
         // Note: the bytecode might be quickened already, it's not practical to undo it
-        PBytecodeRootNode rootNode = new PBytecodeRootNode(getLanguage(), getFrameDescriptor(), getSignature(), co, lazySource, internal, parserCallbacks);
+        PBytecodeRootNode rootNode = new PBytecodeRootNode(getLanguage(), getFrameDescriptor(), getSignature(), co, source, internal, parserCallbacks);
         rootNode.variableTypes = variableTypes;
         return rootNode;
     }

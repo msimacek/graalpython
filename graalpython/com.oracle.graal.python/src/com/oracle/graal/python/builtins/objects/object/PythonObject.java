@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -33,14 +33,20 @@ import java.util.List;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.PythonAbstractObject;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.HandlePointerConverter;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.PythonObjectReference;
+import com.oracle.graal.python.builtins.objects.common.DynamicObjectStorage;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.type.PythonManagedClass;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes.IsSameTypeNode;
 import com.oracle.graal.python.nodes.HiddenAttr;
 import com.oracle.graal.python.nodes.PGuards;
+import com.oracle.graal.python.nodes.object.GetDictIfExistsNode;
 import com.oracle.graal.python.runtime.PythonOptions;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
 import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.object.DynamicObject;
@@ -54,21 +60,40 @@ public class PythonObject extends PythonAbstractObject {
     public static final byte HAS_SLOTS_BUT_NO_DICT_FLAG = 0b1;
     /**
      * Indicates that the shape has some properties that may contain {@link PNone#NO_VALUE} and
-     * therefore the shape itself is not enough to resolve any lookups.
+     * therefore the shape itself is not enough to resolve any lookups. This flag is maintained only
+     * for types and not for all Python objects.
      */
     public static final byte HAS_NO_VALUE_PROPERTIES = 0b10;
     /**
-     * Indicates that the object has a dict in the form of an actual dictionary
+     * Indicates that the object has the dict hidden key set. Use {@link #HAS_MATERIALIZED_DICT} to
+     * determine if the dict must be used.
      */
-    public static final byte HAS_MATERIALIZED_DICT = 0b100;
+    public static final byte HAS_DICT = 0b100;
+    /**
+     * Indicates that the object has a dict in the form of an actual dictionary that is not backed
+     * by this object, i.e., is disconnected from the {@link DynamicObject} properties of this
+     * object. If this flag is set, all property accesses must operate on the dictionary object.
+     */
+    public static final byte HAS_MATERIALIZED_DICT = 0b1000;
     /**
      * Indicates that the object is a static base in the CPython's tp_new_wrapper sense.
      *
      * @see com.oracle.graal.python.nodes.function.builtins.WrapTpNew
      */
-    public static final byte IS_STATIC_BASE = 0b1000;
+    public static final byte IS_STATIC_BASE = 0b10000;
+
+    /**
+     * Reference count of an object that is only referenced by the Java heap - this is larger than 1
+     * since native code sometimes special cases for low refcounts.
+     */
+    public static final long MANAGED_REFCNT = 10;
+
+    public static final long IMMORTAL_REFCNT = 0xFFFFFFFFL; // from include/object.h
 
     private Object pythonClass;
+
+    private long nativePointer = UNINITIALIZED;
+    public PythonObjectReference ref;
 
     @SuppressWarnings("this-escape") // escapes in the assertion
     public PythonObject(Object pythonClass, Shape instanceShape) {
@@ -82,13 +107,28 @@ public class PythonObject extends PythonAbstractObject {
         writeNode.execute(inliningTarget, this, HiddenAttr.DICT, dict);
     }
 
+    public boolean checkDictFlags() {
+        return checkDictFlags(GetDictIfExistsNode.getDictUncached(this));
+    }
+
+    public boolean checkDictFlags(PDict dict) {
+        assert dict == null || hasShapeFlag(HAS_DICT);
+        assert (dict == null || dict.getDictStorage() instanceof DynamicObjectStorage domStorage && domStorage.getStore() == this) || hasShapeFlag(HAS_MATERIALIZED_DICT);
+        return true;
+    }
+
+    private boolean hasShapeFlag(int flag) {
+        return (GetShapeFlagsNode.getUncached().execute(this) & flag) != 0;
+    }
+
     @NeverDefault
-    public Object getPythonClass() {
+    public final Object getPythonClass() {
         return pythonClass;
     }
 
-    public void setPythonClass(Object pythonClass) {
+    public final void setPythonClass(Object pythonClass) {
         assert getShape().getDynamicType() == PNone.NO_VALUE;
+        assert PGuards.isPythonClass(pythonClass);
         this.pythonClass = pythonClass;
     }
 
@@ -145,11 +185,55 @@ public class PythonObject extends PythonAbstractObject {
         return PythonOptions.getCallSiteInlineCacheMaxDepth();
     }
 
-    public final void addShapeFlag(int flag, DynamicObject.GetShapeFlagsNode getShapeFlagsNode, DynamicObject.SetShapeFlagsNode setShapeFlagsNode) {
-        int oldFlags = getShapeFlagsNode.execute(this);
-        int newFlags = oldFlags | flag;
-        if (newFlags != oldFlags) {
-            setShapeFlagsNode.execute(this, newFlags);
+    public final long getNativePointer() {
+        return nativePointer;
+    }
+
+    public final void setNativePointer(long nativePointer) {
+        assert nativePointer != UNINITIALIZED;
+        // we should set the pointer just once
+        assert this.nativePointer == UNINITIALIZED || this.nativePointer == nativePointer;
+        this.nativePointer = nativePointer;
+    }
+
+    public final void clearNativePointer() {
+        this.nativePointer = UNINITIALIZED;
+    }
+
+    @InliningCutoff
+    public final boolean isNative() {
+        return nativePointer != UNINITIALIZED;
+    }
+
+    public final long getRefCount() {
+        if (isNative()) {
+            return CApiTransitions.readNativeRefCount(HandlePointerConverter.pointerToStub(nativePointer));
         }
+        return MANAGED_REFCNT;
+    }
+
+    public final long incRef() {
+        assert isNative();
+        long pointer = HandlePointerConverter.pointerToStub(nativePointer);
+        long refCount = CApiTransitions.readNativeRefCount(pointer);
+        assert refCount >= MANAGED_REFCNT : "invalid refcnt " + refCount + " during incRef in " + Long.toHexString(nativePointer);
+        if (refCount != IMMORTAL_REFCNT) {
+            CApiTransitions.writeNativeRefCount(pointer, refCount + 1);
+            return refCount + 1;
+        }
+        return IMMORTAL_REFCNT;
+    }
+
+    public final long decRef() {
+        assert isNative();
+        long pointer = HandlePointerConverter.pointerToStub(nativePointer);
+        long refCount = CApiTransitions.readNativeRefCount(pointer);
+        if (refCount != IMMORTAL_REFCNT) {
+            long updatedRefCount = refCount - 1;
+            CApiTransitions.writeNativeRefCount(pointer, updatedRefCount);
+            assert updatedRefCount >= MANAGED_REFCNT : "invalid refcnt " + updatedRefCount + " during decRef in " + Long.toHexString(nativePointer);
+            return updatedRefCount;
+        }
+        return refCount;
     }
 }

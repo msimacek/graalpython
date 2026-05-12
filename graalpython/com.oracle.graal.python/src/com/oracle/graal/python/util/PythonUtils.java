@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -73,6 +73,7 @@ import com.oracle.graal.python.builtins.objects.function.PBuiltinFunction;
 import com.oracle.graal.python.builtins.objects.str.PString;
 import com.oracle.graal.python.builtins.objects.type.PythonBuiltinClass;
 import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.attributes.WriteAttributeToObjectNode;
 import com.oracle.graal.python.nodes.function.BuiltinFunctionRootNode;
@@ -100,7 +101,6 @@ import com.oracle.truffle.api.nodes.NodeUtil;
 import com.oracle.truffle.api.nodes.NodeVisitor;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.profiles.ConditionProfile;
-import com.oracle.truffle.api.profiles.ValueProfile;
 import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.api.strings.TruffleString.Encoding;
@@ -720,18 +720,8 @@ public final class PythonUtils {
     }
 
     @TruffleBoundary
-    public static boolean bufferHasRemaining(ByteBuffer buffer) {
-        return buffer.hasRemaining();
-    }
-
-    @TruffleBoundary
     public static boolean equals(Object a, Object b) {
         return a.equals(b);
-    }
-
-    @TruffleBoundary
-    public static <E> ArrayDeque<E> newDeque() {
-        return new ArrayDeque<>();
     }
 
     @TruffleBoundary
@@ -764,22 +754,6 @@ public final class PythonUtils {
         return list.toArray();
     }
 
-    /**
-     * Same as {@link Character#isBmpCodePoint(int)}.
-     */
-    public static boolean isBmpCodePoint(int codePoint) {
-        return codePoint >>> 16 == 0;
-        // Optimized form of:
-        // codePoint >= MIN_VALUE && codePoint <= MAX_VALUE
-        // We consistently use logical shift (>>>) to facilitate
-        // additional runtime optimizations.
-    }
-
-    public static ValueProfile createValueIdentityProfile() {
-        CompilerAsserts.neverPartOfCompilation();
-        return PythonLanguage.get(null).isSingleContext() ? ValueProfile.createIdentityProfile() : ValueProfile.createClassProfile();
-    }
-
     @TruffleBoundary
     public static PBuiltinFunction createMethod(PythonLanguage language, Object klass, NodeFactory<? extends PythonBuiltinBaseNode> nodeFactory, Object type, int numDefaults) {
         Class<? extends PythonBuiltinBaseNode> nodeClass = nodeFactory.getNodeClass();
@@ -790,7 +764,9 @@ public final class PythonUtils {
 
     @TruffleBoundary
     public static PBuiltinFunction createMethod(Object klass, Builtin builtin, RootCallTarget callTarget, Object type, int numDefaults) {
-        assert callTarget.getRootNode() instanceof BuiltinFunctionRootNode r && r.getBuiltin() == builtin;
+        RootNode rootNode = callTarget.getRootNode();
+        assert rootNode instanceof BuiltinFunctionRootNode : String.format("root: %s, builtin: %s, klass: %s", rootNode, builtin, klass);
+        assert ((BuiltinFunctionRootNode) rootNode).getBuiltin() == builtin : String.format("%s != %s, klass: %s", ((BuiltinFunctionRootNode) rootNode).getBuiltin(), builtin, klass);
         int flags = PBuiltinFunction.getFlags(builtin, callTarget);
         TruffleString name = toInternedTruffleStringUncached(builtin.name());
         PBuiltinFunction function = PFactory.createBuiltinFunction(PythonLanguage.get(null), name, type, numDefaults, flags, callTarget);
@@ -858,19 +834,19 @@ public final class PythonUtils {
         return data;
     }
 
-    public static ConditionProfile[] createConditionProfiles(int n) {
-        ConditionProfile[] profiles = new ConditionProfile[n];
-        for (int i = 0; i < profiles.length; i++) {
-            profiles[i] = ConditionProfile.create();
-        }
-        return profiles;
-    }
-
     public static Object builtinClassToType(Object cls) {
         if (cls instanceof PythonBuiltinClass builtinClass) {
             return builtinClass.getType();
         }
         return cls;
+    }
+
+    public static boolean isPrimitive(Object value) {
+        return value instanceof Integer || value instanceof Long || value instanceof Boolean || value instanceof Double;
+    }
+
+    public static Object normalizeNone(ConditionProfile profile, Object o) {
+        return profile.profile(PGuards.isNone(o)) ? PNone.NO_VALUE : o;
     }
 
     public static final class NodeCounterWithLimit implements NodeVisitor {
@@ -1024,30 +1000,6 @@ public final class PythonUtils {
                     0x6e17, 0x7e36, 0x4e55, 0x5e74, 0x2e93, 0x3eb2, 0x0ed1, 0x1ef0,
     };
 
-    /**
-     * Use as a documentation and safety guard in specializations that are meant to be activated
-     * only in the uncached case. Those Specializations exist only to allow to generate an uncached
-     * variant of the node, but should never be activated in a regular cached case.
-     *
-     * Note that such specializations can take VirtualFrame and should forward it to other uncached
-     * (and cached) nodes. The uncached nodes may be executed during the uncached execution of the
-     * bytecode root node where it is allowed to pass the VirtualFrame around without materializing
-     * it.
-     */
-    public static void assertUncached() {
-        if (!TruffleOptions.AOT) {
-            // We cannot assert that it's never part of compilation, because then it would fail
-            // during native-image build since it cannot prove that this Specialization is never
-            // activated at runtime and includes this in runtime compiled methods.
-            CompilerAsserts.neverPartOfCompilation();
-        }
-        CompilerDirectives.transferToInterpreter();
-    }
-
-    public static boolean isBitSet(int state, int position) {
-        return ((state >>> position) & 0x1) != 0;
-    }
-
     public static String formatPointer(Object pointer) {
         CompilerAsserts.neverPartOfCompilation();
         InteropLibrary lib = InteropLibrary.getUncached(pointer);
@@ -1059,6 +1011,11 @@ public final class PythonUtils {
             }
         }
         return String.valueOf(pointer);
+    }
+
+    public static String formatPointer(long pointer) {
+        CompilerAsserts.neverPartOfCompilation();
+        return String.format("0x%016x", pointer);
     }
 
     public static long coerceToLong(Object allocated, InteropLibrary lib) {
@@ -1074,6 +1031,22 @@ public final class PythonUtils {
                 throw CompilerDirectives.shouldNotReachHere(e);
             }
         }
+    }
+
+    /**
+     * Use this helper in PE code or behind Truffle boundary if the PE caller does not push
+     * encapsulating node (either directly or, e.g., via
+     * {@link com.oracle.graal.python.runtime.ExecutionContext.BoundaryCallContext}).
+     * <p/>
+     * For boundary calls: if we know the encapsulating node was set, we can safely call directly
+     * the overload without the location parameter ({@link CallTarget#call(Object...)}).
+     * <p/>
+     * For PE calls: we may be in uncached interpreter (the {@code location} Node is not adoptable
+     * or {@code null}), in which case we must call the overload without the location parameter
+     * ({@link CallTarget#call(Object...)}), so that it uses the encapsulating node.
+     */
+    public static Object callCallTarget(CallTarget target, Node location, Object... args) {
+        return location != null && location.isAdoptable() ? target.call(location, args) : target.call(args);
     }
 
     public static InteropLibrary getUncachedInterop(InteropLibrary existing, Object obj) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -46,24 +46,24 @@ import static com.oracle.graal.python.builtins.modules.ImpModuleBuiltins.FrozenS
 import static com.oracle.graal.python.builtins.modules.ImpModuleBuiltins.FrozenStatus.FROZEN_INVALID;
 import static com.oracle.graal.python.builtins.modules.ImpModuleBuiltins.FrozenStatus.FROZEN_NOT_FOUND;
 import static com.oracle.graal.python.builtins.modules.ImpModuleBuiltins.FrozenStatus.FROZEN_OKAY;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.NULLPTR;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___LOADER__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___ORIGNAME__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___PATH__;
+import static com.oracle.graal.python.nodes.StringLiterals.J_PY_EXTENSION;
 import static com.oracle.graal.python.nodes.StringLiterals.T_EXT_PYD;
 import static com.oracle.graal.python.nodes.StringLiterals.T_EXT_SO;
 import static com.oracle.graal.python.nodes.StringLiterals.T_NAME;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.NotImplementedError;
-import static com.oracle.graal.python.util.PythonUtils.ARRAY_ACCESSOR;
+import static com.oracle.graal.python.util.PythonUtils.ARRAY_ACCESSOR_LE;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
+import static com.oracle.graal.python.util.PythonUtils.internString;
 import static com.oracle.graal.python.util.PythonUtils.toTruffleStringUncached;
 import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
 import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.locks.ReentrantLock;
-
-import org.bouncycastle.crypto.macs.SipHash;
-import org.bouncycastle.crypto.params.KeyParameter;
 
 import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
@@ -89,10 +89,8 @@ import com.oracle.graal.python.builtins.objects.module.FrozenModules;
 import com.oracle.graal.python.builtins.objects.module.PythonFrozenModule;
 import com.oracle.graal.python.builtins.objects.module.PythonModule;
 import com.oracle.graal.python.builtins.objects.object.PythonObject;
-import com.oracle.graal.python.builtins.objects.str.PString;
 import com.oracle.graal.python.builtins.objects.str.StringNodes;
 import com.oracle.graal.python.compiler.CodeUnit;
-import com.oracle.graal.python.compiler.Compiler;
 import com.oracle.graal.python.lib.PyMemoryViewFromObject;
 import com.oracle.graal.python.lib.PyObjectGetAttr;
 import com.oracle.graal.python.lib.PyObjectLookupAttr;
@@ -119,6 +117,7 @@ import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.RootCallTarget;
+import com.oracle.truffle.api.TruffleFile;
 import com.oracle.truffle.api.TruffleSafepoint;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
@@ -127,9 +126,7 @@ import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
-import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.library.CachedLibrary;
-import com.oracle.truffle.api.memory.ByteArraySupport;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.api.strings.TruffleString;
@@ -238,14 +235,6 @@ public final class ImpModuleBuiltins extends PythonBuiltins {
     @Builtin(name = "get_magic")
     @GenerateNodeFactory
     public abstract static class GetMagic extends PythonBuiltinNode {
-        static final int MAGIC_NUMBER = 21000 + Compiler.BYTECODE_VERSION * 10;
-        static final byte[] MAGIC_NUMBER_BYTES = new byte[4];
-        static {
-            ByteArraySupport.littleEndian().putInt(MAGIC_NUMBER_BYTES, 0, MAGIC_NUMBER);
-            MAGIC_NUMBER_BYTES[2] = '\r';
-            MAGIC_NUMBER_BYTES[3] = '\n';
-        }
-
         @Specialization(guards = "isSingleContext()")
         PBytes runCachedSingleContext(
                         @Cached(value = "getMagicNumberPBytes()", weak = true) PBytes magicBytes) {
@@ -255,11 +244,11 @@ public final class ImpModuleBuiltins extends PythonBuiltins {
         @Specialization(replaces = "runCachedSingleContext")
         PBytes run(
                         @Bind PythonLanguage language) {
-            return PFactory.createBytes(language, MAGIC_NUMBER_BYTES);
+            return PFactory.createBytes(language, PythonLanguage.MAGIC_NUMBER_BYTES);
         }
 
         protected PBytes getMagicNumberPBytes() {
-            return PFactory.createBytes(PythonLanguage.get(this), MAGIC_NUMBER_BYTES);
+            return PFactory.createBytes(PythonLanguage.get(this), PythonLanguage.MAGIC_NUMBER_BYTES);
         }
     }
 
@@ -271,8 +260,8 @@ public final class ImpModuleBuiltins extends PythonBuiltins {
                         @Bind PythonContext context,
                         @Bind Node inliningTarget,
                         @Cached("createFor($node)") BoundaryCallData boundaryCallData) {
-            Object nativeModuleDef = extensionModule.getNativeModuleDef();
-            if (nativeModuleDef == null) {
+            long nativeModuleDef = extensionModule.getNativeModuleDef();
+            if (nativeModuleDef == NULLPTR) {
                 return 0;
             }
             PythonLanguage language = context.getLanguage(inliningTarget);
@@ -285,17 +274,17 @@ public final class ImpModuleBuiltins extends PythonBuiltins {
         }
 
         @TruffleBoundary
-        private static int doExec(Node node, PythonContext context, PythonModule extensionModule, Object nativeModuleDef) {
+        private static int doExec(Node node, PythonContext context, PythonModule extensionModule, long nativeModuleDef) {
             /*
              * Check if module is already initialized. CPython does that by testing if 'md_state !=
              * NULL'. So, we do the same.
              */
-            Object mdState = extensionModule.getNativeModuleState();
-            if (mdState != null && !InteropLibrary.getUncached().isNull(mdState)) {
+            long mdState = extensionModule.getNativeModuleState();
+            if (mdState != NULLPTR) {
                 return 0;
             }
 
-            if (!context.hasCApiContext()) {
+            if (context.getCApiState() != PythonContext.CApiState.INITIALIZED) {
                 throw PRaiseNode.raiseStatic(node, PythonBuiltinClassType.SystemError, ErrorMessages.CAPI_NOT_YET_INITIALIZED);
             }
 
@@ -484,7 +473,7 @@ public final class ImpModuleBuiltins extends PythonBuiltins {
                 Object code = null;
 
                 try {
-                    code = MarshalModuleBuiltins.Marshal.load(context, bytes, size, 0);
+                    code = MarshalModuleBuiltins.Marshal.load(context.getLanguage(), bytes, size, 0);
                 } catch (MarshalError | NumberFormatException e) {
                     raiseFrozenError(inliningTarget, raiseNode, FROZEN_INVALID, name);
                 }
@@ -500,8 +489,7 @@ public final class ImpModuleBuiltins extends PythonBuiltins {
                 info = result.info;
                 raiseFrozenError(inliningTarget, raiseNode, status, name);
 
-                RootCallTarget callTarget = createCallTarget(context, info);
-                return PFactory.createCode(context.getLanguage(), callTarget);
+                return createCode(context, info);
             }
         }
     }
@@ -551,9 +539,10 @@ public final class ImpModuleBuiltins extends PythonBuiltins {
 
             PMemoryView data = null;
 
+            PythonLanguage language = context.getLanguage();
             if (withData) {
-                byte[] bytes = MarshalModuleBuiltins.serializeCodeUnit(inliningTarget, context, info.code);
-                data = PyMemoryViewFromObject.getUncached().execute(null, PFactory.createBytes(context.getLanguage(inliningTarget), bytes));
+                byte[] bytes = MarshalModuleBuiltins.serializeCodeUnit(inliningTarget, language, info.code);
+                data = PyMemoryViewFromObject.getUncached().execute(null, PFactory.createBytes(language, bytes));
             }
 
             Object[] returnValues = new Object[]{
@@ -562,7 +551,7 @@ public final class ImpModuleBuiltins extends PythonBuiltins {
                             info.origName == null ? PNone.NONE : info.origName
             };
 
-            return PFactory.createTuple(context.getLanguage(inliningTarget), returnValues);
+            return PFactory.createTuple(language, returnValues);
         }
     }
 
@@ -633,7 +622,7 @@ public final class ImpModuleBuiltins extends PythonBuiltins {
                 }
         }
 
-        RootCallTarget callTarget = createCallTarget(core.getContext(), info);
+        PCode code = createCode(core.getContext(), info);
         PythonModule module = globals == null ? PFactory.createPythonModule(name) : globals;
 
         if (info.isPackage) {
@@ -641,7 +630,7 @@ public final class ImpModuleBuiltins extends PythonBuiltins {
             WriteAttributeToPythonObjectNode.getUncached().execute(module, T___PATH__, PFactory.createList(core.getLanguage()));
         }
 
-        CallDispatchers.SimpleIndirectInvokeNode.executeUncached(callTarget, PArguments.withGlobals(module));
+        CallDispatchers.SimpleIndirectInvokeNode.executeUncached(code.getRootCallTarget(), PArguments.withGlobals(code, module));
 
         Object origName = info.origName == null ? PNone.NONE : info.origName;
         WriteAttributeToPythonObjectNode.getUncached().execute(module, T___ORIGNAME__, origName);
@@ -649,12 +638,42 @@ public final class ImpModuleBuiltins extends PythonBuiltins {
         return module;
     }
 
-    private static RootCallTarget createCallTarget(PythonContext context, FrozenInfo info) {
-        return (RootCallTarget) context.getLanguage().cacheCode(new PythonLanguage.CodeCacheKey(info.origName, System.identityHashCode(info.code)), () -> {
-            String name = PythonLanguage.FROZEN_FILENAME_PREFIX + info.name + PythonLanguage.FROZEN_FILENAME_SUFFIX;
-            Source source = Source.newBuilder("python", "", name).content(Source.CONTENT_NONE).build();
-            return PythonLanguage.callTargetFromBytecode(context, source, info.code);
-        });
+    private static PCode createCode(PythonContext context, FrozenInfo info) {
+        String moduleName = info.name.toJavaStringUncached();
+        String codeName = PythonLanguage.FROZEN_FILENAME_PREFIX + moduleName + PythonLanguage.FROZEN_FILENAME_SUFFIX;
+        TruffleFile file = null;
+        String filename = codeName;
+        try {
+            String fs = context.getEnv().getFileNameSeparator();
+            String basename = context.getStdlibHome() + fs + moduleName.replace(".", fs);
+            String path = info.isPackage ? basename + fs + "__init__.py" : basename + J_PY_EXTENSION;
+            file = context.getEnv().getInternalTruffleFile(path);
+            if (file.isReadable()) {
+                filename = path;
+            }
+        } catch (UnsupportedOperationException | IllegalArgumentException | SecurityException e) {
+            // Fallthrough
+        }
+        TruffleFile originalFile = file;
+        Source source = context.getLanguage().getOrCreateSource((ignored -> {
+            Source newSource = Source.newBuilder(PythonLanguage.ID, "", codeName) //
+                            .content(Source.CONTENT_NONE) //
+                            .internal(PythonLanguage.shouldMarkSourceInternal(context)) //
+                            .mimeType(PythonLanguage.MIME_TYPE).build();
+            PythonLanguage language = context.getLanguage();
+            if (originalFile != null) {
+                language.registerOriginalFile(newSource, originalFile);
+            }
+            return newSource;
+        }), codeName);
+        RootCallTarget callTarget = (RootCallTarget) context.getLanguage().cacheCode(
+                        new PythonLanguage.CodeCacheKey(info.origName, System.identityHashCode(info.code)),
+                        () -> context.getLanguage().callTargetFromBytecode(source, info.code));
+        /*
+         * Setting the original filename as the co_filename is a deviance from CPython, but it's
+         * more user friendly and lets us freeze more modules without it being too visible.
+         */
+        return PFactory.createCode(context.getLanguage(), callTarget, internString(toTruffleStringUncached(filename)));
     }
 
     /*
@@ -722,14 +741,66 @@ public final class ImpModuleBuiltins extends PythonBuiltins {
 
         @TruffleBoundary
         public static byte[] hashSource(long magicNumber, byte[] bytes, int length) {
-            SipHash sipHash = new SipHash(1, 3);
-            byte[] key = new byte[16];
-            ARRAY_ACCESSOR.putLong(key, 0, magicNumber);
-            sipHash.init(new KeyParameter(key));
-            sipHash.update(bytes, 0, length);
-            byte[] out = new byte[sipHash.getMacSize()];
-            sipHash.doFinal(out, 0);
+            long hash = sipHash13(magicNumber, 0, bytes, length);
+            byte[] out = new byte[Long.BYTES];
+            ARRAY_ACCESSOR_LE.putLong(out, 0, hash);
             return out;
+        }
+
+        private static long sipHash13(long k0, long k1, byte[] src, int length) {
+            long b = ((long) length) << 56;
+            long v0 = k0 ^ 0x736f6d6570736575L;
+            long v1 = k1 ^ 0x646f72616e646f6dL;
+            long v2 = k0 ^ 0x6c7967656e657261L;
+            long v3 = k1 ^ 0x7465646279746573L;
+            int offset = 0;
+            while (length - offset >= Long.BYTES) {
+                long mi = ARRAY_ACCESSOR_LE.getLong(src, offset);
+                offset += Long.BYTES;
+                v3 ^= mi;
+                long[] state = singleRound(v0, v1, v2, v3);
+                v0 = state[0];
+                v1 = state[1];
+                v2 = state[2];
+                v3 = state[3];
+                v0 ^= mi;
+            }
+            long tail = 0;
+            int remaining = length - offset;
+            for (int i = 0; i < remaining; i++) {
+                tail |= ((long) src[offset + i] & 0xffL) << (Byte.SIZE * i);
+            }
+            b |= tail;
+            v3 ^= b;
+            long[] state = singleRound(v0, v1, v2, v3);
+            v0 = state[0];
+            v1 = state[1];
+            v2 = state[2];
+            v3 = state[3];
+            v0 ^= b;
+            v2 ^= 0xff;
+            for (int i = 0; i < 3; i++) {
+                state = singleRound(v0, v1, v2, v3);
+                v0 = state[0];
+                v1 = state[1];
+                v2 = state[2];
+                v3 = state[3];
+            }
+            return (v0 ^ v1) ^ (v2 ^ v3);
+        }
+
+        private static long[] singleRound(long v0, long v1, long v2, long v3) {
+            v0 += v1;
+            v2 += v3;
+            v1 = Long.rotateLeft(v1, 13) ^ v0;
+            v3 = Long.rotateLeft(v3, 16) ^ v2;
+            v0 = Long.rotateLeft(v0, 32);
+            v2 += v1;
+            v0 += v3;
+            v1 = Long.rotateLeft(v1, 17) ^ v2;
+            v3 = Long.rotateLeft(v3, 21) ^ v0;
+            v2 = Long.rotateLeft(v2, 32);
+            return new long[]{v0, v1, v2, v3};
         }
 
         @Override
@@ -738,23 +809,20 @@ public final class ImpModuleBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = "_fix_co_filename", minNumOfPositionalArgs = 2)
+    @Builtin(name = "_fix_co_filename", minNumOfPositionalArgs = 2, numOfPositionalOnlyArgs = 2, parameterNames = {"code", "path"})
     @GenerateNodeFactory
-    public abstract static class FixCoFilename extends PythonBinaryBuiltinNode {
-        @Specialization
-        @TruffleBoundary
-        public Object run(PCode code, PString path,
-                        @Bind Node inliningTarget,
-                        @Cached CastToTruffleStringNode castToStringNode) {
-            code.setFilename(castToStringNode.execute(inliningTarget, path));
-            return PNone.NONE;
-        }
-
+    @ArgumentClinic(name = "path", conversion = ClinicConversion.TString)
+    public abstract static class FixCoFilename extends PythonBinaryClinicBuiltinNode {
         @Specialization
         @TruffleBoundary
         public Object run(PCode code, TruffleString path) {
-            code.setFilename(path);
+            code.fixCoFilename(path);
             return PNone.NONE;
+        }
+
+        @Override
+        protected ArgumentClinicProvider getArgumentClinic() {
+            return ImpModuleBuiltinsClinicProviders.FixCoFilenameClinicProviderGen.INSTANCE;
         }
     }
 

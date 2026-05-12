@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2014, Regents of the University of California
  *
  * All rights reserved.
@@ -30,6 +30,7 @@ import static com.oracle.graal.python.builtins.objects.PNone.NO_VALUE;
 import static com.oracle.graal.python.builtins.objects.cext.structs.CFields.PyHeapTypeObject__ht_name;
 import static com.oracle.graal.python.builtins.objects.cext.structs.CFields.PyHeapTypeObject__ht_qualname;
 import static com.oracle.graal.python.builtins.objects.cext.structs.CFields.PyTypeObject__tp_name;
+import static com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.writePtrField;
 import static com.oracle.graal.python.nodes.BuiltinNames.T_BUILTINS;
 import static com.oracle.graal.python.nodes.ErrorMessages.ATTR_NAME_MUST_BE_STRING;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.J___ABSTRACTMETHODS__;
@@ -140,7 +141,6 @@ import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.SpecialAttributeNames;
 import com.oracle.graal.python.nodes.attributes.GetFixedAttributeNode;
 import com.oracle.graal.python.nodes.attributes.LookupAttributeInMRONode;
-import com.oracle.graal.python.nodes.attributes.MergedObjectTypeModuleGetAttributeNode;
 import com.oracle.graal.python.nodes.attributes.ReadAttributeFromObjectNode;
 import com.oracle.graal.python.nodes.attributes.WriteAttributeToObjectNode;
 import com.oracle.graal.python.nodes.builtins.ListNodes.ConstructListNode;
@@ -537,7 +537,8 @@ public final class TypeBuiltins extends PythonBuiltins {
          * {@link com.oracle.graal.python.builtins.objects.object.ObjectBuiltins.GetAttributeNode}
          * and
          * {@link com.oracle.graal.python.builtins.objects.thread.ThreadLocalBuiltins.GetAttributeNode}
-         * and {@link MergedObjectTypeModuleGetAttributeNode}
+         * and
+         * {@link com.oracle.graal.python.nodes.attributes.MergedObjectTypeModuleGetFixedAttributeNode}
          */
         @Specialization
         protected Object doIt(VirtualFrame frame, Object object, Object keyObj,
@@ -589,7 +590,7 @@ public final class TypeBuiltins extends PythonBuiltins {
                 }
             }
 
-            throw raiseNode.raiseAttributeError(inliningTarget, ErrorMessages.OBJ_N_HAS_NO_ATTR_S, object, key);
+            throw raiseNode.raiseAttributeError(inliningTarget, ErrorMessages.TYPE_N_HAS_NO_ATTR, object, key);
         }
 
         private Object readAttributeOfClass(Object object, TruffleString key) {
@@ -634,7 +635,7 @@ public final class TypeBuiltins extends PythonBuiltins {
 
         @TruffleBoundary
         @Specialization(guards = "isImmutable(object)")
-        // No BoundaryCallContext: sllowed only on startup and from internal code
+        // No BoundaryCallContext: allowed only on startup and from internal code
         void setBuiltin(Object object, Object key, Object value) {
             if (PythonContext.get(this).isInitialized()) {
                 throw PRaiseNode.raiseStatic(this, TypeError, ErrorMessages.CANT_SET_ATTRIBUTE_R_OF_IMMUTABLE_TYPE_N, PyObjectReprAsTruffleStringNode.executeUncached(key), object);
@@ -894,7 +895,6 @@ public final class TypeBuiltins extends PythonBuiltins {
             @Specialization
             static void set(Node inliningTarget, PythonAbstractNativeObject type, TruffleString value,
                             @Bind PythonLanguage language,
-                            @Cached(inline = false) CStructAccess.WritePointerNode writePointerNode,
                             @Cached(inline = false) CStructAccess.WriteObjectNewRefNode writeObject,
                             @Cached HiddenAttr.WriteNode writeAttrNode,
                             @Cached TruffleString.SwitchEncodingNode switchEncodingNode,
@@ -902,7 +902,8 @@ public final class TypeBuiltins extends PythonBuiltins {
                 value = switchEncodingNode.execute(value, TruffleString.Encoding.UTF_8);
                 byte[] bytes = copyToByteArrayNode.execute(value, TruffleString.Encoding.UTF_8);
                 PBytes utf8Bytes = PFactory.createBytes(language, bytes);
-                writePointerNode.writeToObj(type, PyTypeObject__tp_name, PySequenceArrayWrapper.ensureNativeSequence(utf8Bytes));
+                long typeRawPtr = type.getPtr();
+                writePtrField(typeRawPtr, PyTypeObject__tp_name, PySequenceArrayWrapper.ensureNativeSequence(utf8Bytes));
                 PString pString = PFactory.createString(language, value);
                 writeAttrNode.execute(inliningTarget, pString, HiddenAttr.PSTRING_UTF8, utf8Bytes);
                 writeObject.writeToObject(type, PyHeapTypeObject__ht_name, pString);
@@ -982,6 +983,7 @@ public final class TypeBuiltins extends PythonBuiltins {
                         @Cached TruffleString.SubstringNode substringNode,
                         @Shared @Cached PRaiseNode raiseNode) {
             // see function 'typeobject.c: type_module'
+            assert IsTypeNode.executeUncached(cls);
             if ((getFlags.execute(cls) & TypeFlags.HEAPTYPE) != 0) {
                 Object module = readAttrNode.execute(cls, T___MODULE__);
                 if (module == NO_VALUE) {
@@ -1066,6 +1068,7 @@ public final class TypeBuiltins extends PythonBuiltins {
             @Specialization
             static void set(PythonAbstractNativeObject type, TruffleString value,
                             @Cached(inline = false) CStructAccess.WriteObjectNewRefNode writeObject) {
+                assert IsTypeNode.executeUncached(type);
                 writeObject.writeToObject(type, PyHeapTypeObject__ht_qualname, value);
             }
         }

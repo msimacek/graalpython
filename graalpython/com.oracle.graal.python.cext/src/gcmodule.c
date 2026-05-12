@@ -1,4 +1,4 @@
-/* Copyright (c) 2024, 2025, Oracle and/or its affiliates.
+/* Copyright (c) 2024, 2026, Oracle and/or its affiliates.
  * Copyright (C) 1996-2024 Python Software Foundation
  *
  * Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
@@ -49,19 +49,19 @@ call_traverse(traverseproc traverse, PyObject *op, visitproc visit, void *arg)
         return 0;
     }
     if (!traverse) {
-        GraalPyPrivate_Log(PY_TRUFFLE_LOG_FINE,
+        GraalPyPrivate_Log(GRAALPY_LOG_FINE,
                       "type '%.100s' is a GC type but tp_traverse is NULL",
                       Py_TYPE((op))->tp_name);
         return 0;
     } else {
         if (_PyObject_IsFreed(op)) {
-            GraalPyPrivate_Log(PY_TRUFFLE_LOG_FINE,
+            GraalPyPrivate_Log(GRAALPY_LOG_FINE,
                           "we tried to call tp_traverse on a freed object at %p (ctx %p)!",
                           op, arg);
             return 0;
         }
         if (_PyObject_IsFreed((PyObject *)Py_TYPE(op))) {
-            GraalPyPrivate_Log(PY_TRUFFLE_LOG_FINE,
+            GraalPyPrivate_Log(GRAALPY_LOG_FINE,
                           "we tried to call tp_traverse on an object at %p with a freed type at %p (ctx %p)!",
                           op, Py_TYPE(op), arg);
             return 0;
@@ -891,7 +891,11 @@ move_unreachable(PyGC_Head *young, PyGC_Head *unreachable,
                 // GraalPy change: this branch, else branch is original CPython code
                 cycle.head = NULL;
                 cycle.n = 0;
-                assert (cycle.reachable == weak_candidates );
+                /* GraalPy change: visit_collect_managed_referents forwards to
+                 * visit_reachable(cycle->reachable), and 'cycle' is initialized
+                 * with 'young'.
+                 */
+                assert(cycle.reachable == young);
                 /* visit_collect_managed_referents is visit_reachable + capture the references into "cycle" */
                 CALL_TRAVERSE(traverse, op, visit_collect_managed_referents, (void *)&cycle);
 
@@ -979,12 +983,25 @@ move_weak_reachable(PyGC_Head *young, PyGC_Head *weak_candidates)
     while (gc != young) {
         Py_ssize_t gc_refcnt = gc_get_refs(gc);
 
-        assert(gc_is_collecting(gc));
-
+        /* GraalPy change: unlike CPython's single-phase flow, objects moved to
+         * 'weak_candidates' already had PREV_MASK_COLLECTING cleared in
+         * move_unreachable() before this phase runs. visit_weak_reachable()
+         * depends on that state so it can rescue weak candidates without
+         * moving them through visit_reachable() again, so gc_is_collecting(gc)
+         * is not a valid invariant here.
+         */
+        // assert(gc_is_collecting(gc));
         /* This phase is done after 'move_unreachable' and so all object
          * remaining in 'young' must have a non-zero gc_refcnt.
          */
-        assert(gc_refcnt);
+        /* GraalPy change: gc_refcnt is also not a stable CPython-style
+         * invariant here. During the weak-candidate flow we reuse '_gc_prev'
+         * for list linkage, so native gc_refs information for rescued objects
+         * is recovered via update_refs()/subtract_refs() and
+         * is_referenced_from_managed(), not by requiring gc_refcnt != 0 for
+         * every object we encounter in this phase.
+         */
+        // assert(gc_refcnt);
         /* If gc_refcnt s not MANAGED_REFCNT, then we know that this object is
          * referenced from native (e.g. stored in a global field). In case that
          * 'gc_refcnt == MANAGED_REFCNT' we don't know if the object is only
@@ -1331,8 +1348,10 @@ handle_legacy_finalizers(PyThreadState *tstate,
                          GCState *gcstate,
                          PyGC_Head *finalizers, PyGC_Head *old)
 {
+#if 0 // GraalPy change: uncollectable objects are not supported
     assert(!_PyErr_Occurred(tstate));
-    assert(gcstate->garbage != NULL);
+    // GraalPy change: we do not use this field
+    // assert(gcstate->garbage != NULL);
 
     PyGC_Head *gc = GC_NEXT(finalizers);
     for (; gc != finalizers; gc = GC_NEXT(gc)) {
@@ -1345,6 +1364,7 @@ handle_legacy_finalizers(PyThreadState *tstate,
             }
         }
     }
+#endif // GraalPy change
 
     gc_list_merge(finalizers, old);
 }
@@ -1403,10 +1423,12 @@ delete_garbage(PyThreadState *tstate, GCState *gcstate,
                                   "refcount is too small");
 
         if (gcstate->debug & DEBUG_SAVEALL) {
+#if 0 // GraalPy change: uncollectable objects are not supported
             assert(gcstate->garbage != NULL);
             if (PyList_Append(gcstate->garbage, op) < 0) {
                 _PyErr_Clear(tstate);
             }
+#endif // GraalPy change
         }
         else {
             inquiry clear;
@@ -1622,14 +1644,16 @@ gc_collect_main(PyThreadState *tstate, int generation,
     // _PyTime_t t1 = 0;   /* initialize to prevent a compiler warning */
     GCState *gcstate = graalpy_get_gc_state(tstate); // GraalPy change
 
-    if (GraalPyPrivate_DisableReferneceQueuePolling()) {
+    if (GraalPyPrivate_DisableReferenceQueuePolling()) {
         // reference queue polling is currently active; cannot proceed
         return m + n;
     }
 
+#if 0 // GraalPy change: uncollectable objects are not supported
     // gc_collect_main() must not be called before _PyGC_Init
     // or after _PyGC_Fini()
     assert(gcstate->garbage != NULL);
+#endif // GraalPy change
     assert(!_PyErr_Occurred(tstate));
 
     if (gcstate->debug & DEBUG_STATS) {
@@ -1779,7 +1803,7 @@ gc_collect_main(PyThreadState *tstate, int generation,
         PyDTrace_GC_DONE(n + m);
     }
 
-    GraalPyPrivate_EnableReferneceQueuePolling();
+    GraalPyPrivate_EnableReferenceQueuePolling();
 
     assert(!_PyErr_Occurred(tstate));
     return n + m;

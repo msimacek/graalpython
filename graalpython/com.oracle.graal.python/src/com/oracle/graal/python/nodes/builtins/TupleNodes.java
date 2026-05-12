@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,15 +40,17 @@
  */
 package com.oracle.graal.python.nodes.builtins;
 
-import static com.oracle.graal.python.builtins.objects.cext.structs.CFields.PyTupleObject__ob_item;
 import static com.oracle.graal.python.builtins.objects.cext.structs.CFields.PyVarObject__ob_size;
+import static com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.readLongField;
 
 import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
+import com.oracle.graal.python.builtins.objects.cext.structs.CFields;
 import com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess;
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes.CreateStorageFromIteratorNode;
+import com.oracle.graal.python.builtins.objects.iterator.IteratorNodes;
 import com.oracle.graal.python.builtins.objects.list.PList;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
 import com.oracle.graal.python.lib.PyObjectGetIter;
@@ -101,10 +103,12 @@ public abstract class TupleNodes {
         static PTuple generic(VirtualFrame frame, Object iterable,
                         @Bind Node inliningTarget,
                         @Bind PythonLanguage language,
+                        @Cached IteratorNodes.GetLength lenNode,
                         @Cached CreateStorageFromIteratorNode storageNode,
                         @Cached PyObjectGetIter getIter) {
+            int len = lenNode.execute(frame, inliningTarget, iterable);
             Object iterObj = getIter.execute(frame, inliningTarget, iterable);
-            return PFactory.createTuple(language, storageNode.execute(frame, iterObj));
+            return PFactory.createTuple(language, storageNode.execute(frame, iterObj, len));
         }
 
         @NeverDefault
@@ -141,12 +145,11 @@ public abstract class TupleNodes {
         public abstract NativeObjectSequenceStorage execute(PythonAbstractNativeObject tuple);
 
         @Specialization
-        NativeObjectSequenceStorage getNative(PythonAbstractNativeObject tuple,
-                        @Cached CStructAccess.ReadPointerNode getContents,
-                        @Cached CStructAccess.ReadI64Node readI64Node) {
+        NativeObjectSequenceStorage getNative(PythonAbstractNativeObject tuple) {
             assert PyTupleCheckNode.executeUncached(tuple);
-            Object array = getContents.readFromObj(tuple, PyTupleObject__ob_item);
-            int size = (int) readI64Node.readFromObj(tuple, PyVarObject__ob_size);
+            long tupleRawPtr = tuple.getPtr();
+            long array = CStructAccess.getFieldPtr(tupleRawPtr, CFields.PyTupleObject__ob_item);
+            int size = (int) readLongField(tupleRawPtr, PyVarObject__ob_size);
             return NativeObjectSequenceStorage.create(array, size, size, false);
         }
     }

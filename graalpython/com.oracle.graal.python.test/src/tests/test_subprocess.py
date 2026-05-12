@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2025, Oracle and/or its affiliates.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates.
 # Copyright (C) 1996-2017 Python Software Foundation
 #
 # Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
@@ -11,7 +11,7 @@ import sys
 from subprocess import CalledProcessError
 from tempfile import mkdtemp
 
-POSIX_BACKEND_IS_JAVA = sys.implementation.name == "graalpy" and __graalpython__.posix_module_backend != 'java'
+POSIX_BACKEND_IS_JAVA = sys.implementation.name == "graalpy" and __graalpython__.posix_module_backend() == 'java'
 
 def test_os_pipe():
     import os
@@ -75,6 +75,17 @@ class TestSubprocess(unittest.TestCase):
                 [sys.executable, "-c", "print('BDFL')"])
         self.assertIn(b'BDFL', output)
 
+    @unittest.skipIf(sys.platform == 'win32', "POSIX argv bytes specific")
+    def test_surrogateescape_non_utf8_argv(self):
+        code = (
+            "import os, sys; "
+            "assert os.fsencode(sys.argv[-1]) == b'\\x8av'; "
+            "print(repr(sys.argv[-1]))"
+        )
+        cmd = f"{shlex.quote(sys.executable)} -c {shlex.quote(code)} \"$(printf '\\212v')\""
+        output = subprocess.check_output(cmd, shell=True, stderr=subprocess.PIPE, text=True)
+        self.assertEqual("'\\udc8av'\n", output)
+
     def test_check_output_nonzero(self):
         # check_call() function with non-zero return code
         with self.assertRaises(subprocess.CalledProcessError) as c:
@@ -122,6 +133,7 @@ class TestSubprocess(unittest.TestCase):
             print("===== stderr:")
             print(safe_decode(e.stderr))
             print("=============")
+            raise
         finally:
             if filename:
                os.remove(filename)
@@ -137,8 +149,7 @@ class TestSubprocess(unittest.TestCase):
                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                  stderr=subprocess.PIPE)
             ps_list = 'not available'
-            if sys.implementation.name == "graalpy" and \\
-                    and sys.platform.startswith("linux"):
+            if sys.implementation.name == "graalpy" and sys.platform.startswith("linux"):
                 ps_list = subprocess.check_output("ps", shell=True, text=True)
             res = os.waitpid(0, 0)
             msg = f"Spawned {p.pid=}, os.waitpid result={res}, output of ps:\\n{ps_list}"

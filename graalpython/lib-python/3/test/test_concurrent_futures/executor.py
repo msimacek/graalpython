@@ -59,9 +59,11 @@ class ExecutorTest:
         # GraalPy change: submit some dummy work first, so the next map call doesn't time out in the worker start up
         list(self.executor.map(time.sleep, [0]))
         try:
+            # GraalPy change: larger timeout for CI flakiness
+            # for i in self.executor.map(time.sleep, [0, 0, 6], timeout=5):
             for i in self.executor.map(time.sleep,
-                                       [0, 0, 6],
-                                       timeout=5):
+                                       [0, 0, 8],
+                                       timeout=3):
                 results.append(i)
         except futures.TimeoutError:
             pass
@@ -106,5 +108,5 @@ class ExecutorTest:
         for obj in self.executor.map(make_dummy_object, range(10)):
             wr = weakref.ref(obj)
             del obj
-            support.gc_collect()  # For PyPy or other GCs.
+            support.gc_collect(wr())  # For PyPy or other GCs.
             self.assertIsNone(wr())

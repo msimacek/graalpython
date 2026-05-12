@@ -26,6 +26,9 @@ selector = [
     'test_unittest',
     'test_logging',
     'test_zipfile',
+    # test_empty_path compares two stats of '.', which can change if another
+    # parallel test creates or removes cwd-relative directories.
+    'test_pathlib',
 ]
 
 [[test_rules]]
@@ -33,6 +36,7 @@ partial_splits_individual_tests = true
 selector = [
     'test_multiprocessing_spawn',
     'test_multiprocessing_main_handling',
+    'test_tarfile',
 ]
 
 

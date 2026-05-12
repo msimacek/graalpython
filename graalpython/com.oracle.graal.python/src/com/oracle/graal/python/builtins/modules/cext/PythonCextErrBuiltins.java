@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -61,6 +61,7 @@ import static com.oracle.graal.python.nodes.ErrorMessages.MUST_BE_MODULE_CLASS;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___DOC__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___MODULE__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___TRACEBACK__;
+import static com.oracle.graal.python.runtime.PythonContext.NATIVE_NULL;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 
 import com.oracle.graal.python.PythonLanguage;
@@ -127,8 +128,8 @@ import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 import com.oracle.truffle.api.strings.TruffleString;
 
 public final class PythonCextErrBuiltins {
-    private static Object noneToNativeNull(Node node, Object obj) {
-        return obj instanceof PNone ? PythonContext.get(node).getNativeNull() : obj;
+    private static Object noneToNativeNull(Object obj) {
+        return obj instanceof PNone ? NATIVE_NULL : obj;
     }
 
     @CApiBuiltin(ret = Void, args = {PyObject, PyObject}, call = Ignored)
@@ -156,7 +157,7 @@ public final class PythonCextErrBuiltins {
 
         @Specialization
         @SuppressWarnings("unused")
-        static Object doClear(@SuppressWarnings("unused") Object threadState, PNone val,
+        static Object doClear(@SuppressWarnings("unused") long threadState, PNone val,
                         @Bind Node inliningTarget,
                         @Bind PythonContext context) {
             PythonLanguage lang = context.getLanguage(inliningTarget);
@@ -165,7 +166,7 @@ public final class PythonCextErrBuiltins {
         }
 
         @Specialization
-        static Object doFull(@SuppressWarnings("unused") Object threadState, PBaseException val,
+        static Object doFull(@SuppressWarnings("unused") long threadState, PBaseException val,
                         @Bind Node inliningTarget,
                         @Bind PythonContext context) {
             PythonLanguage language = context.getLanguage(inliningTarget);
@@ -225,7 +226,7 @@ public final class PythonCextErrBuiltins {
                         @Bind Node inliningTarget,
                         @Bind PythonLanguage language,
                         @Cached HashingStorageGetItem getItem,
-                        @Cached TruffleString.IndexOfCodePointNode indexOfCodepointNode,
+                        @Cached TruffleString.LastIndexOfCodePointNode lastIndexOfCodepointNode,
                         @Cached TruffleString.CodePointLengthNode codePointLengthNode,
                         @Cached TruffleString.SubstringNode substringNode,
                         @Cached PyDictSetItem setItemNode,
@@ -241,12 +242,12 @@ public final class PythonCextErrBuiltins {
                 dict = PFactory.createDict(language);
             }
             int length = codePointLengthNode.execute(name, TS_ENCODING);
-            int dotIdx = indexOfCodepointNode.execute(name, '.', 0, length, TS_ENCODING);
+            int dotIdx = lastIndexOfCodepointNode.execute(name, '.', length, 0, TS_ENCODING);
             if (dotIdx < 0) {
                 notDotProfile.enter(inliningTarget);
                 throw raiseNode.raise(inliningTarget, SystemError, MUST_BE_MODULE_CLASS, "PyErr_NewException", "name");
             }
-            if (getItem.execute(null, inliningTarget, ((PDict) dict).getDictStorage(), base) == null) {
+            if (getItem.execute(null, inliningTarget, ((PDict) dict).getDictStorage(), T___MODULE__) == null) {
                 notModuleProfile.enter(inliningTarget);
                 setItemNode.execute(null, inliningTarget, (PDict) dict, T___MODULE__, substringNode.execute(name, 0, dotIdx, TS_ENCODING, false));
             }
@@ -297,11 +298,11 @@ public final class PythonCextErrBuiltins {
             AbstractTruffleException currentException = getCaughtExceptionNode.executeFromNative();
             if (currentException == null) {
                 noExceptionProfile.enter(inliningTarget);
-                return getNativeNull();
+                return NATIVE_NULL;
             }
             assert currentException != PException.NO_EXCEPTION;
             Object exception = getEscapedExceptionNode.execute(inliningTarget, currentException);
-            Object traceback = noneToNativeNull(inliningTarget, getTracebackNode.execute(inliningTarget, exception));
+            Object traceback = noneToNativeNull(getTracebackNode.execute(inliningTarget, exception));
             return PFactory.createTuple(language, new Object[]{getClassNode.execute(inliningTarget, exception), exception, traceback});
         }
     }
@@ -310,13 +311,13 @@ public final class PythonCextErrBuiltins {
     abstract static class _PyErr_GetHandledException extends CApiUnaryBuiltinNode {
 
         @Specialization
-        static Object get(@SuppressWarnings("unused") Object threadState,
+        static Object get(@SuppressWarnings("unused") long threadState,
                         @Bind Node inliningTarget,
                         @Cached GetCaughtExceptionNode getCaughtExceptionNode,
                         @Cached GetEscapedExceptionNode getEscapedExceptionNode) {
             AbstractTruffleException caughtException = getCaughtExceptionNode.executeFromNative();
             if (caughtException == null) {
-                return PythonContext.get(inliningTarget).getNativeNull();
+                return NATIVE_NULL;
             }
             assert caughtException != PException.NO_EXCEPTION;
             return getEscapedExceptionNode.execute(inliningTarget, caughtException);
@@ -454,7 +455,7 @@ public final class PythonCextErrBuiltins {
         Object getCause(Object exc,
                         @Bind Node inliningTarget,
                         @Cached ExceptionNodes.GetCauseNode getCauseNode) {
-            return noneToNativeNull(inliningTarget, getCauseNode.execute(inliningTarget, exc));
+            return noneToNativeNull(getCauseNode.execute(inliningTarget, exc));
         }
     }
 
@@ -464,7 +465,7 @@ public final class PythonCextErrBuiltins {
         Object setCause(Object exc,
                         @Bind Node inliningTarget,
                         @Cached ExceptionNodes.GetContextNode getContextNode) {
-            return noneToNativeNull(inliningTarget, getContextNode.execute(inliningTarget, exc));
+            return noneToNativeNull(getContextNode.execute(inliningTarget, exc));
         }
     }
 
@@ -486,7 +487,7 @@ public final class PythonCextErrBuiltins {
         Object getTraceback(Object exc,
                         @Bind Node inliningTarget,
                         @Cached ExceptionNodes.GetTracebackNode getTracebackNode) {
-            return noneToNativeNull(inliningTarget, getTracebackNode.execute(inliningTarget, exc));
+            return noneToNativeNull(getTracebackNode.execute(inliningTarget, exc));
         }
     }
 

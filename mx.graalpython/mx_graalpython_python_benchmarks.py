@@ -1,4 +1,4 @@
-# Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -36,10 +36,6 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
-
-import mx
-import mx_benchmark
-
 import glob
 import json
 import math
@@ -47,9 +43,11 @@ import os
 import re
 import shutil
 import sys
-
+import tempfile
 from os.path import join, abspath
 
+import mx
+import mx_benchmark
 
 SUITE = None
 python_vm_registry = None
@@ -79,6 +77,8 @@ SKIPPED_NUMPY_BENCHMARKS = [
     "bench_core.CountNonzero.time_count_nonzero_multi_axis(2, 1000000, <class 'str'>)",  # Times out
     "bench_core.CountNonzero.time_count_nonzero_multi_axis(3, 1000000, <class 'str'>)",  # Times out
     "bench_linalg.LinalgSmallArrays.time_det_small_array",  # TODO fails with numpy.linalg.LinAlgError
+    "bench_indexing.IndexingSeparate.time_mmap_fancy_indexing",  # Hangs in periodic job GR-73912
+    "bench_indexing.IndexingStructured0D.time_array_slice",  # Hangs in periodic job GR-73912
 ]
 
 DEFAULT_PANDAS_BENCHMARKS = [
@@ -94,11 +94,14 @@ SKIPPED_PANDAS_BENCHMARKS = [
     "reshape.Cut.peakmem_cut_interval",  # Times out
     "reshape.Cut.time_cut_interval",  # Times out
     "reshape.GetDummies.time_get_dummies_1d_sparse",  # Times out
+    "reshape.PivotTable.time_pivot_table_categorical",  # Hangs in periodic job GR-74045
     "reshape.PivotTable.time_pivot_table_margins",  # Times out
     "reshape.WideToLong.time_wide_to_long_big",  # Times out
     "reshape.Cut.time_qcut_datetime",  # Transient failure GR-61245, exit code -11
     "reshape.Explode.time_explode",  # Transient failure GR-61245, exit code -11
 ]
+
+SETUPTOOLS_PIN = "77.0.1"
 
 DEFAULT_PYPERFORMANCE_BENCHMARKS = [
     # "2to3",
@@ -202,6 +205,41 @@ def create_asv_benchmark_selection(benchmarks, skipped=()):
         return regex
     negative_lookaheads = [re.escape(skip) + (r'\b' if not skip.endswith(')') else '') for skip in skipped]
     return '^(?!' + '|'.join(negative_lookaheads) + ')(' + regex + ')'
+
+
+def patch_asv_for_cpython_312(workdir, vm_venv):
+    pattern = join(workdir, vm_venv, "lib", "python*", "site-packages", "asv", "plugins", "virtualenv.py")
+    candidates = glob.glob(pattern)
+    if not candidates:
+        mx.abort(f"Could not find ASV virtualenv plugin to patch: {pattern}")
+
+    if len(candidates) != 1:
+        mx.abort(f"Found multiple ASV virtualenv plugins to patch: {candidates}")
+
+    virtualenv_py = candidates[0]
+    with open(virtualenv_py) as f:
+        content = f.read()
+
+    patched_import = "from packaging.version import parse as LooseVersion"
+    if patched_import in content:
+        mx.log(f"ASV virtualenv plugin already patched: {virtualenv_py}")
+        return
+
+    distutils_import = "from distutils.version import LooseVersion"
+    if distutils_import not in content:
+        mx.abort(f"Unexpected ASV virtualenv plugin contents, cannot patch: {virtualenv_py}")
+
+    content = content.replace(
+        distutils_import,
+        "try:\n"
+        "    from packaging.version import parse as LooseVersion\n"
+        "except Exception:\n"
+        "    from distutils.version import LooseVersion",
+        1,
+    )
+    with open(virtualenv_py, "w") as f:
+        f.write(content)
+    mx.log(f"Patched ASV virtualenv plugin for CPython 3.12+: {virtualenv_py}")
 
 
 class PyPerfJsonRule(mx_benchmark.Rule):
@@ -566,7 +604,7 @@ class NumPySuite(PySuite):
 
     BENCHMARK_REQ = [
         "asv==0.5.1",
-        "setuptools==70.3.0",
+        f"setuptools=={SETUPTOOLS_PIN}",
         "distlib==0.3.6",
         "filelock==3.8.0",
         "platformdirs==2.5.2",
@@ -635,6 +673,8 @@ class NumPySuite(PySuite):
             vm.run(workdir, ["-m", "venv", join(workdir, vm_venv)])
             pip = join(workdir, vm_venv, "bin", "pip")
             mx.run([pip, "install", *self.BENCHMARK_REQ], cwd=workdir)
+            if vm.name() == "cpython":
+                patch_asv_for_cpython_312(workdir, vm_venv)
             mx.run(
                 [join(workdir, vm_venv, "bin", "asv"), "machine", "--yes"], cwd=benchdir
             )
@@ -673,12 +713,13 @@ class PandasSuite(PySuite):
 
     BENCHMARK_REQ = [
         "asv==0.5.1",
-        "setuptools==70.3.0",
+        f"setuptools=={SETUPTOOLS_PIN}",
         "distlib==0.3.6",
         "filelock==3.8.0",
         "platformdirs==2.5.2",
         "six==1.16.0",
         "virtualenv==20.16.3",
+        "packaging==24.0",
         "jinja2",
         f"numpy=={NumPySuite.VERSION}",
         f"pandas=={VERSION}",
@@ -763,7 +804,14 @@ class PandasSuite(PySuite):
 
             vm.run(workdir, ["-m", "venv", join(workdir, vm_venv)])
             pip = join(workdir, vm_venv, "bin", "pip")
-            mx.run([pip, "install", *self.BENCHMARK_REQ], cwd=workdir)
+            with tempfile.NamedTemporaryFile('w') as constraints:
+                constraints.write(f"setuptools=={SETUPTOOLS_PIN}\n")
+                constraints.flush()
+                env = os.environ.copy()
+                env['PIP_CONSTRAINT'] = constraints.name
+                mx.run([pip, "install", *self.BENCHMARK_REQ], cwd=workdir, env=env)
+            if vm.name() == "cpython":
+                patch_asv_for_cpython_312(workdir, vm_venv)
             mx.run(
                 [join(workdir, vm_venv, "bin", "asv"), "machine", "--yes"], cwd=benchdir
             )

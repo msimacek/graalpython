@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2025, Oracle and/or its affiliates.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -26,6 +26,17 @@
 package com.oracle.graal.python.builtins.objects.common;
 
 import static com.oracle.graal.python.builtins.objects.common.IndexNodes.checkBounds;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.NULLPTR;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.callocByteArray;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.callocPtrArray;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.copyByteArray;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.copyPtrArray;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.free;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.readByteArrayElement;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.readPtrArrayElement;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.writeByteArrayElement;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.writeByteArrayElements;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.writePtrArrayElement;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.IndexError;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.MemoryError;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.OverflowError;
@@ -74,8 +85,6 @@ import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodesFacto
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodesFactory.ToByteArrayNodeGen;
 import com.oracle.graal.python.builtins.objects.floats.PFloat;
 import com.oracle.graal.python.builtins.objects.ints.PInt;
-import com.oracle.graal.python.builtins.objects.iterator.IteratorBuiltins.NextHelperNode;
-import com.oracle.graal.python.builtins.objects.iterator.IteratorNodes.BuiltinIteratorLengthHint;
 import com.oracle.graal.python.builtins.objects.iterator.IteratorNodes.GetInternalIteratorSequenceStorage;
 import com.oracle.graal.python.builtins.objects.iterator.PBuiltinIterator;
 import com.oracle.graal.python.builtins.objects.list.PList;
@@ -558,6 +567,11 @@ public abstract class SequenceStorageNodes {
             return executeInt(null, s, idx);
         }
 
+        @TruffleBoundary
+        public static int executeIntUncached(SequenceStorage s, int idx) throws UnexpectedResultException {
+            return GetItemScalarNodeGen.getUncached().executeInt(null, s, idx);
+        }
+
         public final int executeKnownInt(Node inliningTarget, SequenceStorage s, int idx) {
             try {
                 return executeInt(inliningTarget, s, idx);
@@ -643,15 +657,13 @@ public abstract class SequenceStorageNodes {
 
         @Specialization
         protected static Object doNativeObject(NativeObjectSequenceStorage storage, int idx,
-                        @Cached CStructAccess.ReadPointerNode readNode,
                         @Cached NativeToPythonNode toJavaNode) {
-            return toJavaNode.execute(readNode.readArrayElement(storage.getPtr(), idx));
+            return toJavaNode.executeRaw(readPtrArrayElement(storage.getPtr(), idx));
         }
 
         @Specialization
-        protected static int doNativeByte(NativeByteSequenceStorage storage, int idx,
-                        @Cached CStructAccess.ReadByteNode readNode) {
-            return readNode.readArrayElement(storage.getPtr(), idx) & 0xff;
+        protected static int doNativeByte(NativeByteSequenceStorage storage, int idx) {
+            return readByteArrayElement(storage.getPtr(), idx) & 0xff;
         }
     }
 
@@ -795,23 +807,21 @@ public abstract class SequenceStorageNodes {
         }
 
         @Specialization
-        protected static SequenceStorage doNativeByte(NativeByteSequenceStorage storage, int start, @SuppressWarnings("unused") int stop, int step, int length,
-                        @Cached CStructAccess.ReadByteNode readNode) {
+        protected static SequenceStorage doNativeByte(NativeByteSequenceStorage storage, int start, @SuppressWarnings("unused") int stop, int step, int length) {
 
             byte[] newArray = new byte[length];
             for (int i = start, j = 0; j < length; i += step, j++) {
-                newArray[j] = readNode.readArrayElement(storage.getPtr(), i);
+                newArray[j] = readByteArrayElement(storage.getPtr(), i);
             }
             return new ByteSequenceStorage(newArray);
         }
 
         @Specialization
         protected static SequenceStorage doNativeObject(NativeObjectSequenceStorage storage, int start, @SuppressWarnings("unused") int stop, int step, int length,
-                        @Cached CStructAccess.ReadPointerNode readNode,
                         @Cached NativeToPythonNode toJavaNode) {
             Object[] newArray = new Object[length];
             for (int i = start, j = 0; j < length; i += step, j++) {
-                newArray[j] = toJavaNode.execute(readNode.readArrayElement(storage.getPtr(), i));
+                newArray[j] = toJavaNode.executeRaw(readPtrArrayElement(storage.getPtr(), i));
             }
             return new ObjectSequenceStorage(newArray);
         }
@@ -1255,7 +1265,7 @@ public abstract class SequenceStorageNodes {
         }
 
         @InliningCutoff
-        @Specialization(guards = "!isNativeWrapper(value)")
+        @Specialization(guards = "!value.isNative()")
         protected static void doInt(@SuppressWarnings("unused") Node inliningTarget, IntSequenceStorage storage, int idx, PInt value) {
             try {
                 storage.setIntItemNormalized(idx, value.intValueExact());
@@ -1275,7 +1285,7 @@ public abstract class SequenceStorageNodes {
         }
 
         @InliningCutoff
-        @Specialization(guards = "!isNativeWrapper(value)")
+        @Specialization(guards = "!value.isNative()")
         protected static void doLong(@SuppressWarnings("unused") Node inliningTarget, LongSequenceStorage storage, int idx, PInt value) {
             try {
                 storage.setLongItemNormalized(idx, value.longValueExact());
@@ -1369,20 +1379,17 @@ public abstract class SequenceStorageNodes {
 
         @Specialization
         protected static void doNativeByte(NativeByteSequenceStorage storage, int idx, Object value,
-                        @Cached CStructAccess.WriteByteNode writeNode,
                         @Cached CastToByteNode castToByteNode) {
-            writeNode.writeArrayElement(storage.getPtr(), idx, castToByteNode.execute(null, value));
+            writeByteArrayElement(storage.getPtr(), idx, castToByteNode.execute(null, value));
         }
 
         @Specialization
         protected static void doNativeObject(NativeObjectSequenceStorage storage, int idx, Object value,
                         @Bind Node inliningTarget,
                         @Cached PythonToNativeNewRefNode toNative,
-                        @Cached CStructAccess.ReadPointerNode readPointerNode,
-                        @Cached CStructAccess.WritePointerNode writePointerNode,
                         @Cached CExtNodes.XDecRefPointerNode decRefPointerNode) {
-            Object old = readPointerNode.readArrayElement(storage.getPtr(), idx);
-            writePointerNode.writeArrayElement(storage.getPtr(), idx, toNative.execute(value));
+            long old = readPtrArrayElement(storage.getPtr(), idx);
+            writePtrArrayElement(storage.getPtr(), idx, toNative.executeLong(value));
             decRefPointerNode.execute(inliningTarget, old);
         }
     }
@@ -1395,16 +1402,14 @@ public abstract class SequenceStorageNodes {
 
         @Specialization
         protected static void doNativeByte(NativeByteSequenceStorage storage, int idx, Object value,
-                        @Cached CStructAccess.WriteByteNode writeNode,
                         @Cached CastToByteNode castToByteNode) {
-            writeNode.writeArrayElement(storage.getPtr(), idx, castToByteNode.execute(null, value));
+            writeByteArrayElement(storage.getPtr(), idx, castToByteNode.execute(null, value));
         }
 
         @Specialization
         protected static void doNativeObject(NativeObjectSequenceStorage storage, int idx, Object value,
-                        @Cached CStructAccess.WritePointerNode writePointerNode,
                         @Cached PythonToNativeNewRefNode toNative) {
-            writePointerNode.writeArrayElement(storage.getPtr(), idx, toNative.execute(value));
+            writePtrArrayElement(storage.getPtr(), idx, toNative.executeLong(value));
         }
     }
 
@@ -1637,39 +1642,35 @@ public abstract class SequenceStorageNodes {
             abstract void execute(NativeSequenceStorage storage);
 
             @Specialization
-            static void doNativeByte(NativeByteSequenceStorage storage,
-                            @Cached CStructAccess.ReadByteNode readByteNode,
-                            @Cached CStructAccess.WriteByteNode writeByteNode) {
+            static void doNativeByte(NativeByteSequenceStorage storage) {
                 int length = storage.length();
                 if (length > 0) {
                     int head = 0;
                     int tail = length - 1;
                     int middle = (length - 1) / 2;
-                    Object ptr = storage.getPtr();
+                    long ptr = storage.getPtr();
 
                     for (; head <= middle; head++, tail--) {
-                        byte temp = readByteNode.readArrayElement(ptr, head);
-                        writeByteNode.writeArrayElement(ptr, head, readByteNode.readArrayElement(ptr, tail));
-                        writeByteNode.writeArrayElement(ptr, tail, temp);
+                        byte temp = readByteArrayElement(ptr, head);
+                        writeByteArrayElement(ptr, head, readByteArrayElement(ptr, tail));
+                        writeByteArrayElement(ptr, tail, temp);
                     }
                 }
             }
 
             @Specialization
-            static void doNativeObject(NativeObjectSequenceStorage storage,
-                            @Cached CStructAccess.ReadPointerNode readPointerNode,
-                            @Cached CStructAccess.WritePointerNode writePointerNode) {
+            static void doNativeObject(NativeObjectSequenceStorage storage) {
                 int length = storage.length();
                 if (length > 0) {
                     int head = 0;
                     int tail = length - 1;
                     int middle = (length - 1) / 2;
-                    Object ptr = storage.getPtr();
+                    long ptr = storage.getPtr();
 
                     for (; head <= middle; head++, tail--) {
-                        Object temp = readPointerNode.readArrayElement(ptr, head);
-                        writePointerNode.writeArrayElement(ptr, head, readPointerNode.readArrayElement(ptr, tail));
-                        writePointerNode.writeArrayElement(ptr, tail, temp);
+                        long temp = readPtrArrayElement(ptr, head);
+                        writePtrArrayElement(ptr, head, readPtrArrayElement(ptr, tail));
+                        writePtrArrayElement(ptr, tail, temp);
                     }
                 }
             }
@@ -1857,21 +1858,18 @@ public abstract class SequenceStorageNodes {
         }
 
         @Specialization
-        static NativeByteSequenceStorage doByte(byte[] arr, int length, boolean createRef,
-                        @Shared @Cached(inline = false) CStructAccess.AllocateNode alloc,
-                        @Cached(inline = false) CStructAccess.WriteByteNode write) {
-            Object mem = alloc.calloc(arr.length + 1, java.lang.Byte.BYTES);
-            write.writeByteArray(mem, arr);
+        static NativeByteSequenceStorage doByte(byte[] arr, int length, boolean createRef) {
+            long mem = callocByteArray(arr.length + 1L);
+            writeByteArrayElements(mem, 0, arr, 0, arr.length);
             return NativeByteSequenceStorage.create(mem, length, arr.length, createRef);
         }
 
         @Specialization
         static NativeSequenceStorage doObject(Object[] arr, int length, boolean createRef,
-                        @Shared @Cached(inline = false) CStructAccess.AllocateNode alloc,
                         @Cached(inline = false) CStructAccess.WriteObjectNewRefNode write) {
-            Object mem = alloc.calloc(arr.length + 1, CStructAccess.POINTER_SIZE);
-            write.writeArray(mem, arr, length, 0, 0);
-            return NativeObjectSequenceStorage.create(mem, length, arr.length, createRef);
+            long memPtr = callocPtrArray(arr.length + 1L);
+            write.writeArray(memPtr, arr, length, 0, 0);
+            return NativeObjectSequenceStorage.create(memPtr, length, arr.length, createRef);
         }
     }
 
@@ -3215,55 +3213,28 @@ public abstract class SequenceStorageNodes {
             abstract void execute(NativeSequenceStorage s, int cap);
 
             @Specialization
-            static void doNativeByte(NativeByteSequenceStorage s, int cap,
-                            @Bind Node inliningTarget,
-                            @Shared @CachedLibrary(limit = "2") InteropLibrary lib,
-                            @Shared @Cached CStructAccess.AllocateNode alloc,
-                            @Shared @Cached CStructAccess.FreeNode free,
-                            @Shared @Cached PRaiseNode raiseNode,
-                            @Cached CStructAccess.ReadByteNode read,
-                            @Cached CStructAccess.WriteByteNode write) {
+            static void doNativeByte(NativeByteSequenceStorage s, int cap) {
                 int oldCapacity = s.getCapacity();
                 if (cap > oldCapacity) {
                     int newCapacity = computeNewCapacity(cap);
-                    Object oldMem = s.getPtr();
-                    Object newMem = alloc.alloc(newCapacity);
-                    if (lib.isNull(newMem)) {
-                        throw raiseNode.raise(inliningTarget, MemoryError);
-                    }
-                    // TODO: turn this into a memcpy
-                    for (long i = 0; i < oldCapacity; i++) {
-                        write.writeArrayElement(newMem, i, read.readArrayElement(oldMem, i));
-                    }
-                    free.free(oldMem);
+                    long oldMem = s.getPtr();
+                    long newMem = callocByteArray(newCapacity);
+                    copyByteArray(newMem, 0, oldMem, 0, oldCapacity);
+                    free(oldMem);
                     s.setPtr(newMem);
                     s.setCapacity(newCapacity);
                 }
             }
 
             @Specialization
-            static void doNativeObject(NativeObjectSequenceStorage s, int cap,
-                            @Bind Node inliningTarget,
-                            @Shared @CachedLibrary(limit = "2") InteropLibrary lib,
-                            @Shared @Cached CStructAccess.AllocateNode alloc,
-                            @Shared @Cached CStructAccess.FreeNode free,
-                            @Shared @Cached PRaiseNode raiseNode,
-                            @Cached CStructAccess.ReadPointerNode read,
-                            @Cached CStructAccess.WritePointerNode write) {
+            static void doNativeObject(NativeObjectSequenceStorage s, int cap) {
                 int oldCapacity = s.getCapacity();
                 if (cap > oldCapacity) {
                     int newCapacity = computeNewCapacity(cap);
-                    Object oldMem = s.getPtr();
-                    long bytes = newCapacity * 8;
-                    Object newMem = alloc.alloc(bytes);
-                    if (lib.isNull(newMem)) {
-                        throw raiseNode.raise(inliningTarget, MemoryError);
-                    }
-                    // TODO: turn this into a memcpy
-                    for (long i = 0; i < oldCapacity; i++) {
-                        write.writeArrayElement(newMem, i, read.readArrayElement(oldMem, i));
-                    }
-                    free.free(oldMem);
+                    long oldMem = s.getPtr();
+                    long newMem = callocPtrArray(newCapacity);
+                    copyPtrArray(newMem, 0, oldMem, 0, oldCapacity);
+                    free(oldMem);
                     s.setPtr(newMem);
                     s.setCapacity(newCapacity);
                 }
@@ -3486,15 +3457,13 @@ public abstract class SequenceStorageNodes {
         @InliningCutoff
         static void doShrink(NativeObjectSequenceStorage s, int len,
                         @Bind Node inliningTarget,
-                        @Cached CStructAccess.ReadPointerNode readNode,
-                        @Cached CStructAccess.WritePointerNode writeNode,
                         @Cached CExtNodes.XDecRefPointerNode decRefPointerNode) {
             if (len < s.length()) {
                 // When shrinking, we need to decref the items that are now past the end
                 for (int i = len; i < s.length(); i++) {
-                    Object elementPointer = readNode.readArrayElement(s.getPtr(), i);
+                    long elementPointer = readPtrArrayElement(s.getPtr(), i);
                     decRefPointerNode.execute(inliningTarget, elementPointer);
-                    writeNode.writeArrayElement(s.getPtr(), i, 0L);
+                    writePtrArrayElement(s.getPtr(), i, NULLPTR);
                 }
             }
             s.setNewLength(len);
@@ -3606,15 +3575,13 @@ public abstract class SequenceStorageNodes {
 
         @Specialization
         static void doNativeObjectStorage(Node inliningTarget, NativeObjectSequenceStorage s, int idx,
-                        @Cached(inline = false) CStructAccess.ReadPointerNode readPointerNode,
-                        @Cached(inline = false) CStructAccess.WritePointerNode writePointerNode,
                         @Cached CExtNodes.XDecRefPointerNode decRefNode) {
             int len = s.length();
-            Object deleted = readPointerNode.readArrayElement(s.getPtr(), idx);
+            long deleted = readPtrArrayElement(s.getPtr(), idx);
             for (int i = idx; i < len - 1; i++) {
-                writePointerNode.writeArrayElement(s.getPtr(), i, readPointerNode.readArrayElement(s.getPtr(), i + 1));
+                writePtrArrayElement(s.getPtr(), i, readPtrArrayElement(s.getPtr(), i + 1));
             }
-            writePointerNode.writeArrayElement(s.getPtr(), len - 1, 0L);
+            writePtrArrayElement(s.getPtr(), len - 1, NULLPTR);
             s.setNewLength(len - 1);
             decRefNode.execute(inliningTarget, deleted);
         }
@@ -4101,15 +4068,13 @@ public abstract class SequenceStorageNodes {
         @Specialization
         protected static SequenceStorage doNativeObjectStorage(Node inliningTarget, NativeObjectSequenceStorage storage, int index, Object value,
                         @Exclusive @Cached EnsureCapacityNode ensureCapacityNode,
-                        @Cached(inline = false) CStructAccess.ReadPointerNode readPointerNode,
-                        @Cached(inline = false) CStructAccess.WritePointerNode writePointerNode,
                         @Cached PythonToNativeNewRefNode toNative) {
             int newLength = storage.length() + 1;
             ensureCapacityNode.execute(inliningTarget, storage, newLength);
             for (int i = storage.length(); i > index; i--) {
-                writePointerNode.writeArrayElement(storage.getPtr(), i, readPointerNode.readArrayElement(storage.getPtr(), i - 1));
+                writePtrArrayElement(storage.getPtr(), i, readPtrArrayElement(storage.getPtr(), i - 1));
             }
-            writePointerNode.writeArrayElement(storage.getPtr(), index, toNative.execute(value));
+            writePtrArrayElement(storage.getPtr(), index, toNative.executeLong(value));
             storage.setNewLength(newLength);
             return storage;
         }
@@ -4117,15 +4082,13 @@ public abstract class SequenceStorageNodes {
         @Specialization
         protected static SequenceStorage doNativeByteStorage(Node inliningTarget, NativeByteSequenceStorage storage, int index, Object value,
                         @Exclusive @Cached EnsureCapacityNode ensureCapacityNode,
-                        @Cached(inline = false) CStructAccess.ReadByteNode readByteNode,
-                        @Cached(inline = false) CStructAccess.WriteByteNode writeByteNode,
                         @Cached CastToByteNode castToByteNode) {
             int newLength = storage.length() + 1;
             ensureCapacityNode.execute(inliningTarget, storage, newLength);
             for (int i = storage.length(); i > index; i--) {
-                writeByteNode.writeArrayElement(storage.getPtr(), i, readByteNode.readArrayElement(storage.getPtr(), i - 1));
+                writeByteArrayElement(storage.getPtr(), i, readByteArrayElement(storage.getPtr(), i - 1));
             }
-            writeByteNode.writeArrayElement(storage.getPtr(), index, castToByteNode.execute(null, value));
+            writeByteArrayElement(storage.getPtr(), index, castToByteNode.execute(null, value));
             storage.setNewLength(newLength);
             return storage;
         }
@@ -4183,31 +4146,6 @@ public abstract class SequenceStorageNodes {
                                 elements[i++] = value;
                             }
                             return new BoolSequenceStorage(elements, i);
-                        }
-                        case Byte: {
-                            byte[] elements = new byte[size];
-                            array = elements;
-                            while (true) {
-                                Object next;
-                                try {
-                                    next = nextNode.execute(frame, inliningTarget, iterator);
-                                } catch (IteratorExhausted e) {
-                                    LoopNode.reportLoopCount(this, i);
-                                    break;
-                                }
-                                int value = PGuards.expectInteger(next);
-                                byte bvalue;
-                                try {
-                                    bvalue = PInt.byteValueExact(value);
-                                    if (growArrayProfile.profile(inliningTarget, i >= elements.length)) {
-                                        array = elements = PythonUtils.arrayCopyOf(elements, elements.length * 2);
-                                    }
-                                    elements[i++] = bvalue;
-                                } catch (OverflowException e) {
-                                    throw new UnexpectedResultException(value);
-                                }
-                            }
-                            return new ByteSequenceStorage(elements, i);
                         }
                         case Int: {
                             int[] elements = new int[size];
@@ -4336,190 +4274,6 @@ public abstract class SequenceStorageNodes {
             }
         }
 
-        /**
-         * This version is specific to builtin iterators and looks for STOP_MARKER instead of
-         * StopIteration.
-         */
-        protected static SequenceStorage createStorageFromBuiltin(VirtualFrame frame, PBuiltinIterator iterator, int len, StorageType type, NextHelperNode nextNode,
-                        IsBuiltinObjectProfile errorProfile, Node inliningTarget, InlinedCountingConditionProfile growArrayProfile, InlinedLoopConditionProfile loopProfile) {
-            final int size = len > 0 ? len : START_SIZE;
-            int i = 0;
-            boolean exhausted = false;
-            if (type == Uninitialized || type == Empty) {
-                Object[] elements = new Object[size];
-                while (loopProfile.profile(inliningTarget, !exhausted)) {
-                    try {
-                        Object value = nextNode.execute(frame, inliningTarget, iterator);
-                        if (growArrayProfile.profile(inliningTarget, i >= elements.length)) {
-                            elements = PythonUtils.arrayCopyOf(elements, elements.length * 2);
-                        }
-                        elements[i++] = value;
-                    } catch (IteratorExhausted e) {
-                        exhausted = true;
-                    } catch (PException e) {
-                        e.expectStopIteration(inliningTarget, errorProfile);
-                        exhausted = true;
-                    }
-                }
-                return SequenceStorageFactory.createStorage(PythonUtils.arrayCopyOf(elements, i));
-            } else {
-                Object array = null;
-                try {
-                    switch (type) {
-                        case Boolean: {
-                            boolean[] elements = new boolean[size];
-                            array = elements;
-                            while (loopProfile.profile(inliningTarget, !exhausted)) {
-                                try {
-                                    Object value = nextNode.execute(frame, inliningTarget, iterator);
-                                    if (growArrayProfile.profile(inliningTarget, i >= elements.length)) {
-                                        elements = PythonUtils.arrayCopyOf(elements, elements.length * 2);
-                                        array = elements;
-                                    }
-                                    elements[i] = PGuards.expectBoolean(value);
-                                } catch (IteratorExhausted e) {
-                                    exhausted = true;
-                                } catch (PException e) {
-                                    e.expectStopIteration(inliningTarget, errorProfile);
-                                    exhausted = true;
-                                }
-                            }
-                            return new BoolSequenceStorage(elements, i);
-                        }
-                        case Byte: {
-                            byte[] elements = new byte[size];
-                            array = elements;
-                            while (loopProfile.profile(inliningTarget, !exhausted)) {
-                                try {
-                                    Object value = nextNode.execute(frame, inliningTarget, iterator);
-                                    byte bvalue;
-                                    try {
-                                        bvalue = PInt.byteValueExact(PGuards.expectInteger(value));
-                                    } catch (OverflowException e) {
-                                        throw new UnexpectedResultException(value);
-                                    }
-                                    if (growArrayProfile.profile(inliningTarget, i >= elements.length)) {
-                                        array = elements = PythonUtils.arrayCopyOf(elements, elements.length * 2);
-                                    }
-                                    elements[i++] = bvalue;
-                                } catch (IteratorExhausted e) {
-                                    exhausted = true;
-                                } catch (PException e) {
-                                    e.expectStopIteration(inliningTarget, errorProfile);
-                                    exhausted = true;
-                                }
-                            }
-                            return new ByteSequenceStorage(elements, i);
-                        }
-                        case Int: {
-                            int[] elements = new int[size];
-                            array = elements;
-                            while (loopProfile.profile(inliningTarget, !exhausted)) {
-                                try {
-                                    Object value = nextNode.execute(frame, inliningTarget, iterator);
-                                    if (growArrayProfile.profile(inliningTarget, i >= elements.length)) {
-                                        array = elements = PythonUtils.arrayCopyOf(elements, elements.length * 2);
-                                    }
-                                    elements[i++] = PGuards.expectInteger(value);
-                                } catch (IteratorExhausted e) {
-                                    exhausted = true;
-                                } catch (PException e) {
-                                    e.expectStopIteration(inliningTarget, errorProfile);
-                                    exhausted = true;
-                                }
-                            }
-                            return new IntSequenceStorage(elements, i);
-                        }
-                        case Long: {
-                            long[] elements = new long[size];
-                            array = elements;
-                            while (loopProfile.profile(inliningTarget, !exhausted)) {
-                                try {
-                                    Object value = nextNode.execute(frame, inliningTarget, iterator);
-                                    if (growArrayProfile.profile(inliningTarget, i >= elements.length)) {
-                                        array = elements = PythonUtils.arrayCopyOf(elements, elements.length * 2);
-                                    }
-                                    elements[i++] = PGuards.expectLong(value);
-                                } catch (IteratorExhausted e) {
-                                    exhausted = true;
-                                } catch (PException e) {
-                                    e.expectStopIteration(inliningTarget, errorProfile);
-                                    exhausted = true;
-                                }
-                            }
-                            return new LongSequenceStorage(elements, i);
-                        }
-                        case Double: {
-                            double[] elements = new double[size];
-                            array = elements;
-                            while (loopProfile.profile(inliningTarget, !exhausted)) {
-                                try {
-                                    Object value = nextNode.execute(frame, inliningTarget, iterator);
-                                    if (growArrayProfile.profile(inliningTarget, i >= elements.length)) {
-                                        array = elements = PythonUtils.arrayCopyOf(elements, elements.length * 2);
-                                    }
-                                    elements[i++] = PGuards.expectDouble(value);
-                                } catch (IteratorExhausted e) {
-                                    exhausted = true;
-                                } catch (PException e) {
-                                    e.expectStopIteration(inliningTarget, errorProfile);
-                                    exhausted = true;
-                                }
-                            }
-                            return new DoubleSequenceStorage(elements, i);
-                        }
-                        case Generic: {
-                            Object[] elements = new Object[size];
-                            while (loopProfile.profile(inliningTarget, !exhausted)) {
-                                try {
-                                    Object value = nextNode.execute(frame, inliningTarget, iterator);
-                                    if (growArrayProfile.profile(inliningTarget, i >= elements.length)) {
-                                        elements = PythonUtils.arrayCopyOf(elements, elements.length * 2);
-                                    }
-                                    elements[i++] = value;
-                                } catch (IteratorExhausted e) {
-                                    exhausted = true;
-                                } catch (PException e) {
-                                    e.expectStopIteration(inliningTarget, errorProfile);
-                                    exhausted = true;
-                                }
-                            }
-                            return new ObjectSequenceStorage(elements, i);
-                        }
-                        default:
-                            CompilerDirectives.transferToInterpreterAndInvalidate();
-                            throw new RuntimeException("unexpected state");
-                    }
-                } catch (UnexpectedResultException e) {
-                    return genericFallback(frame, iterator, array, i - 1, e.getResult(), nextNode, inliningTarget, errorProfile);
-                }
-            }
-        }
-
-        private static SequenceStorage genericFallback(VirtualFrame frame, PBuiltinIterator iterator, Object array, int count, Object result, NextHelperNode nextNode, Node inliningTarget,
-                        IsBuiltinObjectProfile errorProfile) {
-            Object[] elements = new Object[Array.getLength(array) * 2];
-            int i = 0;
-            for (; i < count; i++) {
-                elements[i] = Array.get(array, i);
-            }
-            elements[i++] = result;
-            while (true) {
-                try {
-                    Object value = nextNode.execute(frame, inliningTarget, iterator);
-                    if (i >= elements.length) {
-                        elements = PythonUtils.arrayCopyOf(elements, elements.length * 2);
-                    }
-                    elements[i++] = value;
-                } catch (IteratorExhausted e) {
-                    break;
-                } catch (PException e) {
-                    e.expectStopIteration(inliningTarget, errorProfile);
-                }
-            }
-            return new ObjectSequenceStorage(elements, i);
-        }
-
         @SuppressWarnings("truffle-static-method")
         public abstract static class CreateStorageFromIteratorNodeCached extends CreateStorageFromIteratorNode {
 
@@ -4528,16 +4282,16 @@ public abstract class SequenceStorageNodes {
             private static final int MAX_PREALLOCATE_SIZE = 32;
             @CompilationFinal int startSizeProfiled = START_SIZE;
 
-            public boolean isBuiltinIterator(GetClassNode getClass, Node inliningTarget, Object iterator) {
+            boolean isBuiltinIterator(GetClassNode getClass, Node inliningTarget, Object iterator) {
                 return iterator instanceof PBuiltinIterator && getClass.execute(inliningTarget, iterator) == PythonBuiltinClassType.PIterator;
             }
 
-            public static SequenceStorage getSequenceStorage(Node inliningTarget, GetInternalIteratorSequenceStorage node, PBuiltinIterator iterator) {
+            static SequenceStorage getSequenceStorage(Node inliningTarget, GetInternalIteratorSequenceStorage node, PBuiltinIterator iterator) {
                 return iterator.index != 0 || iterator.isExhausted() ? null : node.execute(inliningTarget, iterator);
             }
 
-            @Specialization(guards = {"isBuiltinIterator(getClassNode, inliningTarget, it)", "storage != null"}, limit = "3")
-            public static SequenceStorage createBuiltinFastPath(PBuiltinIterator it, @SuppressWarnings("unused") int len,
+            @Specialization(guards = {"isBuiltinIterator(getClassNode, inliningTarget, it)", "storage != null"}, limit = "1")
+            static SequenceStorage createBuiltinFastPath(PBuiltinIterator it, @SuppressWarnings("unused") int len,
                             @Bind Node inliningTarget,
                             @SuppressWarnings("unused") @Exclusive @Cached GetClassNode getClassNode,
                             @SuppressWarnings("unused") @Cached GetInternalIteratorSequenceStorage getIterSeqStorageNode,
@@ -4547,57 +4301,16 @@ public abstract class SequenceStorageNodes {
                 return copyNode.execute(inliningTarget, storage);
             }
 
-            @Specialization(replaces = "createBuiltinFastPath", guards = {"isBuiltinIterator(getClassNode, inliningTarget, iterator)", "len < 0"}, limit = "3")
-            public SequenceStorage createBuiltinUnknownLen(VirtualFrame frame, PBuiltinIterator iterator, @SuppressWarnings("unused") int len,
+            @Specialization
+            SequenceStorage createGeneric(VirtualFrame frame, Object iterator, int len,
                             @Bind Node inliningTarget,
-                            @SuppressWarnings("unused") @Exclusive @Cached GetClassNode getClassNode,
-                            @Cached BuiltinIteratorLengthHint lengthHint,
-                            @Exclusive @Cached InlinedLoopConditionProfile loopProfile,
-                            @Exclusive @Cached IsBuiltinObjectProfile errorProfile,
-                            @Exclusive @Cached InlinedCountingConditionProfile arrayGrowProfile,
-                            @Exclusive @Cached GetElementType getElementType,
-                            @Exclusive @Cached NextHelperNode nextNode) {
-                int expectedLen = lengthHint.execute(inliningTarget, iterator);
-                if (expectedLen < 0) {
-                    expectedLen = startSizeProfiled;
-                }
-                SequenceStorage s = createStorageFromBuiltin(frame, iterator, expectedLen, expectedElementType, nextNode, errorProfile, inliningTarget, arrayGrowProfile, loopProfile);
-                return profileResult(getElementType, inliningTarget, s, true);
-            }
-
-            @Specialization(replaces = "createBuiltinFastPath", guards = {"isBuiltinIterator(getClassNode, inliningTarget, iterator)", "len >= 0"}, limit = "3")
-            public SequenceStorage createBuiltinKnownLen(VirtualFrame frame, PBuiltinIterator iterator, int len,
-                            @Bind Node inliningTarget,
-                            @SuppressWarnings("unused") @Exclusive @Cached GetClassNode getClassNode,
-                            @Exclusive @Cached InlinedLoopConditionProfile loopProfile,
-                            @Exclusive @Cached IsBuiltinObjectProfile errorProfile,
-                            @Exclusive @Cached InlinedCountingConditionProfile arrayGrowProfile,
-                            @Exclusive @Cached GetElementType getElementType,
-                            @Exclusive @Cached NextHelperNode nextNode) {
-                SequenceStorage s = createStorageFromBuiltin(frame, iterator, len, expectedElementType, nextNode, errorProfile, inliningTarget, arrayGrowProfile, loopProfile);
-                return profileResult(getElementType, inliningTarget, s, false);
-            }
-
-            @Specialization(guards = {"!isBuiltinIterator(getClassNode, inliningTarget, iterator)", "len < 0"})
-            public SequenceStorage createGenericUnknownLen(VirtualFrame frame, Object iterator, @SuppressWarnings("unused") int len,
-                            @Bind Node inliningTarget,
-                            @SuppressWarnings("unused") @Shared @Cached GetClassNode getClassNode,
-                            @Shared("arrayGrowProfile") @Cached InlinedCountingConditionProfile arrayGrowProfile,
-                            @Shared @Cached GetElementType getElementType,
-                            @Shared @Cached PyIterNextNode nextNode) {
-                SequenceStorage s = createStorage(frame, iterator, startSizeProfiled, expectedElementType, nextNode, inliningTarget, arrayGrowProfile);
-                return profileResult(getElementType, inliningTarget, s, true);
-            }
-
-            @Specialization(guards = {"!isBuiltinIterator(getClassNode, inliningTarget, iterator)", "len >= 0"})
-            public SequenceStorage createGenericKnownLen(VirtualFrame frame, Object iterator, int len,
-                            @Bind Node inliningTarget,
-                            @SuppressWarnings("unused") @Shared @Cached GetClassNode getClassNode,
-                            @Shared("arrayGrowProfile") @Cached InlinedCountingConditionProfile arrayGrowProfile,
-                            @Shared @Cached GetElementType getElementType,
-                            @Shared @Cached PyIterNextNode nextNode) {
-                SequenceStorage s = createStorage(frame, iterator, len, expectedElementType, nextNode, inliningTarget, arrayGrowProfile);
-                return profileResult(getElementType, inliningTarget, s, false);
+                            @Cached InlinedConditionProfile haveLenProfile,
+                            @Cached InlinedCountingConditionProfile arrayGrowProfile,
+                            @Cached GetElementType getElementType,
+                            @Cached PyIterNextNode nextNode) {
+                boolean haveLen = haveLenProfile.profile(inliningTarget, len >= 0);
+                SequenceStorage s = createStorage(frame, iterator, haveLen ? len : startSizeProfiled, expectedElementType, nextNode, inliningTarget, arrayGrowProfile);
+                return profileResult(getElementType, inliningTarget, s, !haveLen);
             }
 
             private SequenceStorage profileResult(GetElementType getElementType, Node inliningTarget, SequenceStorage storage, boolean profileLength) {

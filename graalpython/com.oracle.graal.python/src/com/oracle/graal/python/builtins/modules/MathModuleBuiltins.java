@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2014, Regents of the University of California
  *
  * All rights reserved.
@@ -34,7 +34,6 @@ import static com.oracle.graal.python.runtime.exception.PythonErrorType.ZeroDivi
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.MathContext;
-import java.util.Arrays;
 import java.util.List;
 
 import com.oracle.graal.python.PythonLanguage;
@@ -50,6 +49,9 @@ import com.oracle.graal.python.builtins.objects.function.PKeyword;
 import com.oracle.graal.python.builtins.objects.ints.IntBuiltins;
 import com.oracle.graal.python.builtins.objects.ints.PInt;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
+import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlot;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotIterNext;
 import com.oracle.graal.python.lib.IteratorExhausted;
 import com.oracle.graal.python.lib.PyBoolCheckNode;
 import com.oracle.graal.python.lib.PyFloatAsDoubleNode;
@@ -70,6 +72,7 @@ import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.builtins.TupleNodes;
 import com.oracle.graal.python.nodes.call.special.CallUnaryMethodNode;
 import com.oracle.graal.python.nodes.call.special.LookupAndCallUnaryNode;
+import com.oracle.graal.python.nodes.call.special.SpecialMethodNotFound;
 import com.oracle.graal.python.nodes.call.special.LookupSpecialMethodNode;
 import com.oracle.graal.python.nodes.classes.IsSubtypeNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
@@ -91,6 +94,7 @@ import com.oracle.graal.python.nodes.util.NarrowBigIntegerNode;
 import com.oracle.graal.python.runtime.exception.PException;
 import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.OverflowException;
+import com.oracle.graal.python.util.XSum;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
@@ -108,6 +112,7 @@ import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.dsl.TypeSystemReference;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.LoopNode;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 import com.oracle.truffle.api.profiles.InlinedLoopConditionProfile;
@@ -665,45 +670,26 @@ public final class MathModuleBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     public abstract static class FrexpNode extends PythonUnaryClinicBuiltinNode {
         public static double[] frexp(double value) {
-            // double can represent int without loss of data
-            int exponent = 0;
-            double mantissa = 0.0;
-
-            if (value == 0.0 || value == -0.0) {
-                return new double[]{mantissa, exponent};
+            if (value == 0.0) {
+                return new double[]{0.0, 0};
+            } else if (!Double.isFinite(value)) {
+                return new double[]{value, -1};
             }
 
-            if (Double.isNaN(value)) {
-                mantissa = Double.NaN;
-                exponent = -1;
-                return new double[]{mantissa, exponent};
+            int exponent = Math.getExponent(value);
+
+            // Handle subnormal numbers
+            if (exponent == Double.MIN_EXPONENT - 1) {
+                // Scale up into the normal range
+                double scaled = Math.scalb(value, Double.MAX_EXPONENT);
+                exponent = Math.getExponent(scaled) - Double.MAX_EXPONENT;
             }
 
-            if (Double.isInfinite(value)) {
-                mantissa = value;
-                exponent = -1;
-                return new double[]{mantissa, exponent};
-            }
+            // Adjust exponent so that 0.5 <= abs(mantissa) < 1
+            exponent += 1;
+            double mantissa = Math.scalb(value, -exponent);
 
-            boolean neg = false;
-            mantissa = value;
-
-            if (mantissa < 0) {
-                mantissa = -mantissa;
-                neg = true;
-            }
-            if (mantissa >= 1.0) {
-                while (mantissa >= 1) {
-                    ++exponent;
-                    mantissa /= 2;
-                }
-            } else if (mantissa < 0.5) {
-                while (mantissa < 0.5) {
-                    --exponent;
-                    mantissa *= 2;
-                }
-            }
-            return new double[]{neg ? -mantissa : mantissa, exponent};
+            return new double[]{mantissa, exponent};
         }
 
         @Specialization
@@ -856,6 +842,9 @@ public final class MathModuleBuiltins extends PythonBuiltins {
             }
             double fraction = value % 1;
             double integral = value - fraction;
+            if (integral == 0.0) {
+                integral = Math.copySign(0.0, value);
+            }
             return PFactory.createTuple(language, new Object[]{fraction, integral});
         }
 
@@ -869,127 +858,65 @@ public final class MathModuleBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     public abstract static class FsumNode extends PythonUnaryBuiltinNode {
 
+        /**
+         * Note: this specialization uses an inlined version of {@link PyIterNextNode} with the
+         * tp_iternext slot moved out of the loop.
+         */
         @Specialization
         static double doIt(VirtualFrame frame, Object iterable,
                         @Bind Node inliningTarget,
                         @Cached PyObjectGetIter getIter,
-                        @Cached PyIterNextNode nextNode,
+                        @Cached GetClassNode nextNodeGetClassNode,
+                        @Cached TpSlots.GetCachedTpSlotsNode nextNodeGetSlots,
+                        @Cached TpSlotIterNext.CallSlotTpIterNextNode nextNodeCallNext,
+                        @Cached IsBuiltinObjectProfile nextNodeStopIterationProfile,
                         @Cached PyFloatAsDoubleNode asDoubleNode,
-                        @Cached InlinedLoopConditionProfile loopProfile,
                         @Cached PRaiseNode raiseNode) {
-            /*
-             * This implementation is taken from CPython. The performance is not good. Should be
-             * faster. It can be easily replace with much simpler code based on BigDecimal:
-             *
-             * BigDecimal result = BigDecimal.ZERO;
-             *
-             * in cycle just: result = result.add(BigDecimal.valueof(x); ... The current
-             * implementation is little bit faster. The testFSum in test_math.py takes in different
-             * implementations: CPython ~0.6s CurrentImpl: ~14.3s Using BigDecimal: ~15.1
-             */
             Object iterator = getIter.execute(frame, inliningTarget, iterable);
-            double x, y, t, hi, lo = 0, yr, inf_sum = 0, special_sum = 0, sum;
-            double xsave;
-            int i, j, n = 0, arayLength = 32;
-            double[] p = new double[arayLength];
-            boolean exhausted = false;
-            while (loopProfile.profile(inliningTarget, !exhausted)) {
-                try {
-                    Object next = nextNode.execute(frame, inliningTarget, iterator);
-                    x = asDoubleNode.execute(frame, inliningTarget, next);
-                    xsave = x;
-                    for (i = j = 0; j < n; j++) { /* for y in partials */
-                        y = p[j];
-                        if (Math.abs(x) < Math.abs(y)) {
-                            t = x;
-                            x = y;
-                            y = t;
-                        }
-                        hi = x + y;
-                        yr = hi - x;
-                        lo = y - yr;
-                        if (lo != 0.0) {
-                            p[i++] = lo;
-                        }
-                        x = hi;
-                    }
 
-                    n = i;
-                    if (x != 0.0) {
-                        if (!Double.isFinite(x)) {
-                            /*
-                             * a nonfinite x could arise either as a result of intermediate
-                             * overflow, or as a result of a nan or inf in the summands
-                             */
-                            if (Double.isFinite(xsave)) {
-                                throw raiseNode.raise(inliningTarget, OverflowError, ErrorMessages.INTERMEDIATE_OVERFLOW_IN, "fsum");
-                            }
-                            if (Double.isInfinite(xsave)) {
-                                inf_sum += xsave;
-                            }
-                            special_sum += xsave;
-                            /* reset partials */
-                            n = 0;
-                        } else if (n >= arayLength) {
-                            arayLength += arayLength;
-                            p = Arrays.copyOf(p, arayLength);
-                        } else {
-                            p[n++] = x;
-                        }
+            TpSlot tpIternext = nextNodeGetSlots.execute(inliningTarget, nextNodeGetClassNode.execute(inliningTarget, iterator)).tp_iternext();
+            assert tpIternext != null;
+
+            var acc = new XSum.SmallAccumulator();
+            int loopCount = 0;
+            while (true) {
+                try {
+                    Object next = nextNodeCallNext.execute(frame, inliningTarget, tpIternext, iterator);
+                    if (CompilerDirectives.hasNextTier() && loopCount < Integer.MAX_VALUE) {
+                        loopCount++;
                     }
+                    acc.add(asDoubleNode.execute(frame, inliningTarget, next));
                 } catch (IteratorExhausted e) {
-                    exhausted = true;
+                    break;
+                } catch (PException e) {
+                    e.expectStopIteration(inliningTarget, nextNodeStopIterationProfile);
+                    break;
+                } finally {
+                    LoopNode.reportLoopCount(inliningTarget, loopCount);
                 }
             }
 
-            if (special_sum != 0.0) {
-                if (Double.isNaN(inf_sum)) {
+            if (acc.isNaNResult()) {
+                return Double.NaN;
+            }
+
+            if (acc.isInfiniteResult()) {
+                double result = acc.getInfiniteResult();
+                if (Double.isNaN(result)) {
                     throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.NEG_INF_PLUS_INF_IN);
                 } else {
-                    sum = special_sum;
-                    return sum;
+                    assert Double.isInfinite(result);
+                    return result;
                 }
             }
 
-            hi = 0.0;
-            if (n > 0) {
-                hi = p[--n];
-                /*
-                 * sum_exact(ps, hi) from the top, stop when the sum becomes inexact.
-                 */
-                while (n > 0) {
-                    x = hi;
-                    y = p[--n];
-                    assert (Math.abs(y) < Math.abs(x));
-                    hi = x + y;
-                    yr = hi - x;
-                    lo = y - yr;
-                    if (lo != 0.0) {
-                        break;
-                    }
-                }
-                /*
-                 * Make half-even rounding work across multiple partials. Needed so that sum([1e-16,
-                 * 1, 1e16]) will round-up the last digit to two instead of down to zero (the 1e-16
-                 * makes the 1 slightly closer to two). With a potential 1 ULP rounding error
-                 * fixed-up, math.fsum() can guarantee commutativity.
-                 */
-                if (n > 0 && ((lo < 0.0 && p[n - 1] < 0.0) ||
-                                (lo > 0.0 && p[n - 1] > 0.0))) {
-                    y = lo * 2.0;
-                    x = hi + y;
-                    yr = x - hi;
-                    if (compareAsBigDecimal(y, yr) == 0) {
-                        hi = x;
-                    }
-                }
+            double result = acc.round();
+            // +Inf or -Inf if exponent has overflowed
+            if (Double.isInfinite(result)) {
+                throw raiseNode.raise(inliningTarget, OverflowError, ErrorMessages.INTERMEDIATE_OVERFLOW_IN, "fsum");
+            } else {
+                return result;
             }
-            return hi;
-        }
-
-        @TruffleBoundary
-        private static int compareAsBigDecimal(double y, double yr) {
-            return BigDecimal.valueOf(y).compareTo(BigDecimal.valueOf(yr));
         }
     }
 
@@ -1144,11 +1071,11 @@ public final class MathModuleBuiltins extends PythonBuiltins {
                         @Bind Node inliningTarget,
                         @Cached LoopConditionProfile profile,
                         @Cached IsZeroNode isZeroNode,
-                        @Shared @Cached PyNumberIndexNode indexNode,
+                        @Exclusive @Cached PyNumberIndexNode indexNode,
                         @Cached Gcd2Node gcdNode,
                         @Cached IntBuiltins.FloorDivNode floorDivNode,
                         @Cached IntBuiltins.MulNode mulNode,
-                        @Shared @Cached BuiltinFunctions.AbsNode absNode) {
+                        @Exclusive @Cached BuiltinFunctions.AbsNode absNode) {
             Object a = indexNode.execute(frame, inliningTarget, args[0]);
             profile.profileCounted(args.length);
             for (int i = 1; profile.inject(i < args.length); i++) {
@@ -1167,8 +1094,8 @@ public final class MathModuleBuiltins extends PythonBuiltins {
         @Specialization(guards = {"args.length == 1", "keywords.length == 0"})
         public static Object gcdOne(VirtualFrame frame, @SuppressWarnings("unused") Object self, Object[] args, @SuppressWarnings("unused") PKeyword[] keywords,
                         @Bind Node inliningTarget,
-                        @Shared @Cached PyNumberIndexNode indexNode,
-                        @Shared @Cached BuiltinFunctions.AbsNode absNode) {
+                        @Exclusive @Cached PyNumberIndexNode indexNode,
+                        @Exclusive @Cached BuiltinFunctions.AbsNode absNode) {
             return indexNode.execute(frame, inliningTarget, absNode.execute(frame, args[0]));
         }
 
@@ -2262,11 +2189,11 @@ public final class MathModuleBuiltins extends PythonBuiltins {
                         @Bind Node inliningTarget,
                         @Cached("create(T___TRUNC__)") LookupAndCallUnaryNode callTrunc,
                         @Cached PRaiseNode raiseNode) {
-            Object result = callTrunc.executeObject(frame, obj);
-            if (result == PNone.NO_VALUE) {
+            try {
+                return callTrunc.executeObject(frame, obj);
+            } catch (SpecialMethodNotFound e) {
                 throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.TYPE_DOESNT_DEFINE_METHOD, obj, "__trunc__");
             }
-            return result;
         }
     }
 

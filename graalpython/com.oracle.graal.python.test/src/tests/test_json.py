@@ -1,4 +1,4 @@
-# Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -59,6 +59,26 @@ BIGINT_JSON_DATA = '''
 
 
 class JsonTest(unittest.TestCase):
+    def test_callable_object_hook(self):
+        called = []
+        class Hook:
+            def __call__(self, obj):
+                called.append(True)
+                return obj
+
+        hook_instance = Hook()
+        result = json.loads('{"a": 1, "b": 2}', object_hook=hook_instance)
+        assert len(called) == 1
+        assert result == {"a": 1, "b": 2}
+
+    def test_invalid_object_hook(self):
+        with self.assertRaises(TypeError):
+            json.loads('{"a": 1}', object_hook="not_a_function")
+
+    def test_invalid_object_pairs_hook(self):
+        with self.assertRaises(TypeError):
+            json.loads('{"a": 1}', object_pairs_hook=12345)
+
     def test_dump(self):
         cwd = os.getcwd()
         new_file_path = os.path.join(cwd, 'myFile.json')
@@ -88,3 +108,11 @@ class JsonTest(unittest.TestCase):
         assert s == '{"foo": "\\uda6a"}'
         s = json.dumps({'foo': "\uda6a"}, ensure_ascii=False)
         assert s == '{"foo": "\uda6a"}'
+
+    def test_object_hook_nested(self):
+        def hook(obj):
+            return "hooked"
+
+        assert json.loads('{"outer": {"inner": {"leaf": 1}}}', object_hook=hook) == "hooked"
+        assert json.loads('{"outer": {"inner": {"leaf": 1}}}', object_pairs_hook=hook) == "hooked"
+

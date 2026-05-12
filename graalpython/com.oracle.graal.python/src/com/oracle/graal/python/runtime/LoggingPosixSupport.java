@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -749,6 +749,61 @@ public class LoggingPosixSupport extends PosixSupport {
             lib.kill(delegate, pid, signal);
         } catch (PosixException e) {
             throw logException("kill", e);
+        }
+    }
+
+    @ExportMessage
+    final void raise(int signal,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
+        logEnter("raise", "%d", signal);
+        try {
+            lib.raise(delegate, signal);
+        } catch (PosixException e) {
+            throw logException("raise", e);
+        }
+    }
+
+    @ExportMessage
+    final int alarm(int seconds,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
+        logEnter("alarm", "%d", seconds);
+        try {
+            return logExit("alarm", "%d", lib.alarm(delegate, seconds));
+        } catch (PosixException e) {
+            throw logException("alarm", e);
+        }
+    }
+
+    @ExportMessage
+    final Timeval[] getitimer(int which,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
+        logEnter("getitimer", "%d", which);
+        try {
+            return logExit("getitimer", "%s", lib.getitimer(delegate, which));
+        } catch (PosixException e) {
+            throw logException("getitimer", e);
+        }
+    }
+
+    @ExportMessage
+    final Timeval[] setitimer(int which, Timeval delay, Timeval interval,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
+        logEnter("setitimer", "%d, %s, %s", which, delay, interval);
+        try {
+            return logExit("setitimer", "%s", lib.setitimer(delegate, which, delay, interval));
+        } catch (PosixException e) {
+            throw logException("setitimer", e);
+        }
+    }
+
+    @ExportMessage
+    final void signalSelf(int signal,
+                    @CachedLibrary("this.delegate") PosixSupportLibrary lib) throws PosixException {
+        logEnter("signalSelf", "%d", signal);
+        try {
+            lib.signalSelf(delegate, signal);
+        } catch (PosixException e) {
+            throw logException("signalSelf", e);
         }
     }
 

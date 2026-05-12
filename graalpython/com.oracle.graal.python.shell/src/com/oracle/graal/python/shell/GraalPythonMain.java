@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -34,6 +34,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.management.ManagementFactory;
+import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
+import java.nio.charset.Charset;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CoderResult;
+import java.nio.charset.CodingErrorAction;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.NoSuchFileException;
@@ -78,6 +84,56 @@ public final class GraalPythonMain extends AbstractLanguageLauncher {
      */
     public static void main(String[] args) {
         new GraalPythonMain().launch(args);
+    }
+
+    @Override
+    protected String decodeArgument(byte[] argument) {
+        Charset charset = Charset.defaultCharset();
+        String decoded = new String(argument, charset);
+        if (decoded.indexOf('\uFFFD') < 0) {
+            return decoded;
+        }
+        return decodeArgument(argument, charset);
+    }
+
+    /*
+     * Match documented Unix sys.argv behavior:
+     * https://docs.python.org/3.12/library/sys.html#sys.argv
+     * "When you need original bytes, you can get it by `[os.fsencode(arg) for arg in sys.argv]`."
+     */
+    private static String decodeArgument(byte[] argument, Charset charset) {
+        CharsetDecoder decoder = charset.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT);
+        StringBuilder builder = new StringBuilder(argument.length);
+        ByteBuffer in = ByteBuffer.wrap(argument);
+        CharBuffer out = CharBuffer.allocate(Math.max(1, (int) Math.ceil(argument.length * decoder.maxCharsPerByte())));
+        while (true) {
+            CoderResult result = decoder.decode(in, out, true);
+            appendDecodedChars(builder, out);
+            if (result.isUnderflow()) {
+                break;
+            } else if (result.isOverflow()) {
+                continue;
+            } else if (result.isError()) {
+                int errorLength = result.length();
+                for (int i = 0; i < errorLength && in.hasRemaining(); i++) {
+                    builder.append((char) (0xDC00 + (in.get() & 0xff)));
+                }
+            }
+        }
+        while (true) {
+            CoderResult result = decoder.flush(out);
+            appendDecodedChars(builder, out);
+            if (result.isUnderflow()) {
+                break;
+            }
+        }
+        return builder.toString();
+    }
+
+    private static void appendDecodedChars(StringBuilder builder, CharBuffer out) {
+        out.flip();
+        builder.append(out);
+        out.clear();
     }
 
     private static final String LANGUAGE_ID = "python";
@@ -182,6 +238,7 @@ public final class GraalPythonMain extends AbstractLanguageLauncher {
         boolean posixBackendSpecified = false;
         boolean sha3BackendSpecified = false;
         boolean compressionBackendSpecified = false;
+        boolean pyExpatBackendSpecified = false;
         boolean installSignalHandlersSpecified = false;
         boolean isolateNativeModulesSpecified = false;
         for (Iterator<String> argumentIterator = arguments.iterator(); argumentIterator.hasNext();) {
@@ -272,7 +329,9 @@ public final class GraalPythonMain extends AbstractLanguageLauncher {
                                             matchesPythonOption(arg, "CAPI") ||
                                             matchesPythonOption(arg, "PosixModuleBackend") ||
                                             matchesPythonOption(arg, "Sha3ModuleBackend") ||
-                                            matchesPythonOption(arg, "CompressionModulesBackend")) {
+                                            matchesPythonOption(arg, "CompressionModulesBackend") ||
+                                            matchesPythonOption(arg, "PyExpatModuleBackend") ||
+                                            matchesPythonOption(arg, "UnicodeCharacterDatabaseNativeFallback")) {
                                 addRelaunchArg(arg);
                             }
                             if (matchesPythonOption(arg, "PosixModuleBackend")) {
@@ -283,6 +342,9 @@ public final class GraalPythonMain extends AbstractLanguageLauncher {
                             }
                             if (matchesPythonOption(arg, "CompressionModulesBackend")) {
                                 compressionBackendSpecified = true;
+                            }
+                            if (matchesPythonOption(arg, "PyExpatModuleBackend")) {
+                                pyExpatBackendSpecified = true;
                             }
                             if (matchesPythonOption(arg, "InstallSignalHandlers")) {
                                 installSignalHandlersSpecified = true;
@@ -450,6 +512,9 @@ public final class GraalPythonMain extends AbstractLanguageLauncher {
         }
         if (!compressionBackendSpecified) {
             polyglotOptions.put("python.CompressionModulesBackend", "native");
+        }
+        if (!pyExpatBackendSpecified) {
+            polyglotOptions.put("python.PyExpatModuleBackend", "native");
         }
         if (!installSignalHandlersSpecified) {
             polyglotOptions.put("python.InstallSignalHandlers", "true");
@@ -804,13 +869,14 @@ public final class GraalPythonMain extends AbstractLanguageLauncher {
             contextBuilder.option("python.PyCachePrefix", cachePrefix);
         }
 
+        setOptionIfNotSetViaCommandLine(contextBuilder, "AllowSignalHandlers", "true");
+
         if (IS_WINDOWS) {
             contextBuilder.option("python.PosixModuleBackend", "java");
         }
 
-        if (!hasContextOptionSetViaCommandLine("WarnExperimentalFeatures")) {
-            contextBuilder.option("python.WarnExperimentalFeatures", "false");
-        }
+        setOptionIfNotSetViaCommandLine(contextBuilder, "WarnExperimentalFeatures", "false");
+        setOptionIfNotSetViaCommandLine(contextBuilder, "UnicodeCharacterDatabaseNativeFallback", "true");
 
         if (multiContext) {
             contextBuilder.engine(Engine.newBuilder().allowExperimentalOptions(true).options(enginePolyglotOptions).build());
@@ -851,7 +917,7 @@ public final class GraalPythonMain extends AbstractLanguageLauncher {
                     printFileNotFoundException(e);
                 }
             }
-            if ((commandString == null && inputFile == null) || inspectFlag) {
+            if ((tty && commandString == null && inputFile == null) || inspectFlag) {
                 inspectFlag = false;
                 rc = readEvalPrint(context, consoleHandler, sysModule);
             }
@@ -984,11 +1050,16 @@ public final class GraalPythonMain extends AbstractLanguageLauncher {
                             }
                             if (Files.exists(baseExecutable)) {
                                 contextBuilder.option("python.BaseExecutable", baseExecutable.toString());
-                                /*
-                                 * This is needed to support the legacy GraalVM layout where the
-                                 * executable is a symlink into the 'languages' directory.
-                                 */
-                                contextBuilder.option("python.PythonHome", baseExecutable.getParent().getParent().toString());
+                                if ("/app".equals(baseExecutable.toString())) {
+                                    // GraalOS case
+                                    contextBuilder.option("python.PythonHome", "/");
+                                } else {
+                                    /*
+                                     * This is needed to support the legacy GraalVM layout where the
+                                     * executable is a symlink into the 'languages' directory.
+                                     */
+                                    contextBuilder.option("python.PythonHome", baseExecutable.getParent().getParent().toString());
+                                }
                             }
                         } catch (NullPointerException | InvalidPathException ex) {
                             // NullPointerException covers the possible null result of getParent()
@@ -996,19 +1067,13 @@ public final class GraalPythonMain extends AbstractLanguageLauncher {
                         }
                         break;
                     case "venvlauncher_command":
-                        if (!hasContextOptionSetViaCommandLine("VenvlauncherCommand")) {
-                            contextBuilder.option("python.VenvlauncherCommand", parts[1].trim());
-                        }
+                        setOptionIfNotSetViaCommandLine(contextBuilder, "VenvlauncherCommand", parts[1].trim());
                         break;
                     case "base-prefix":
-                        if (!hasContextOptionSetViaCommandLine("SysBasePrefix")) {
-                            contextBuilder.option("python.SysBasePrefix", parts[1].trim());
-                        }
+                        setOptionIfNotSetViaCommandLine(contextBuilder, "SysBasePrefix", parts[1].trim());
                         break;
                     case "base-executable":
-                        if (!hasContextOptionSetViaCommandLine("BaseExecutable")) {
-                            contextBuilder.option("python.BaseExecutable", parts[1].trim());
-                        }
+                        setOptionIfNotSetViaCommandLine(contextBuilder, "BaseExecutable", parts[1].trim());
                         break;
                 }
             }
@@ -1037,6 +1102,12 @@ public final class GraalPythonMain extends AbstractLanguageLauncher {
             }
         }
         return null;
+    }
+
+    private void setOptionIfNotSetViaCommandLine(Context.Builder builder, String key, String value) {
+        if (!hasContextOptionSetViaCommandLine(key)) {
+            builder.option("python." + key, value);
+        }
     }
 
     private boolean hasContextOptionSetViaCommandLine(String key) {
@@ -1204,6 +1275,7 @@ public final class GraalPythonMain extends AbstractLanguageLauncher {
                     while (true) { // processing subsequent lines while input is incomplete
                         try {
                             context.eval(Source.newBuilder(getLanguageId(), sb.toString(), "<stdin>").interactive(true).buildLiteral());
+                            flushInteractiveOutput(sysModule);
                         } catch (PolyglotException e) {
                             if (ps2 == null) {
                                 ps2 = doEcho ? sysModule.getMember("ps2").asString() : null;
@@ -1249,6 +1321,7 @@ public final class GraalPythonMain extends AbstractLanguageLauncher {
                                     continue;
                                 }
                             }
+                            flushInteractiveOutput(sysModule);
                             // process the exception from eval or from the last parsing of the input
                             // + additional source
                             if (e.isExit()) {
@@ -1287,6 +1360,22 @@ public final class GraalPythonMain extends AbstractLanguageLauncher {
             }
         } catch (ExitException e) {
             return e.code;
+        }
+    }
+
+    private static void flushInteractiveOutput(Value sysModule) {
+        flushInteractiveStream(sysModule, "stderr");
+        flushInteractiveStream(sysModule, "stdout");
+    }
+
+    private static void flushInteractiveStream(Value sysModule, String name) {
+        try {
+            Value stream = sysModule.getMember(name);
+            if (stream != null && !stream.isNull() && stream.canInvokeMember("flush")) {
+                stream.invokeMember("flush");
+            }
+        } catch (PolyglotException | UnsupportedOperationException e) {
+            // Match CPython's interactive flush_io: stream flush failures are ignored.
         }
     }
 

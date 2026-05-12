@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -586,6 +586,41 @@ public class PreInitPosixSupport extends PosixSupport {
                     @CachedLibrary("this.nativePosixSupport") PosixSupportLibrary nativeLib) throws PosixException {
         checkNotInPreInitialization();
         return nativeLib.readlinkat(nativePosixSupport, dirFd, path);
+    }
+
+    @ExportMessage
+    final void raise(int signal,
+                    @CachedLibrary("this.nativePosixSupport") PosixSupportLibrary nativeLib) throws PosixException {
+        checkNotInPreInitialization();
+        nativeLib.raise(nativePosixSupport, signal);
+    }
+
+    @ExportMessage
+    final int alarm(int seconds,
+                    @CachedLibrary("this.nativePosixSupport") PosixSupportLibrary nativeLib) throws PosixException {
+        checkNotInPreInitialization();
+        return nativeLib.alarm(nativePosixSupport, seconds);
+    }
+
+    @ExportMessage
+    final Timeval[] getitimer(int which,
+                    @CachedLibrary("this.nativePosixSupport") PosixSupportLibrary nativeLib) throws PosixException {
+        checkNotInPreInitialization();
+        return nativeLib.getitimer(nativePosixSupport, which);
+    }
+
+    @ExportMessage
+    final Timeval[] setitimer(int which, Timeval delay, Timeval interval,
+                    @CachedLibrary("this.nativePosixSupport") PosixSupportLibrary nativeLib) throws PosixException {
+        checkNotInPreInitialization();
+        return nativeLib.setitimer(nativePosixSupport, which, delay, interval);
+    }
+
+    @ExportMessage
+    final void signalSelf(int signal,
+                    @CachedLibrary("this.nativePosixSupport") PosixSupportLibrary nativeLib) throws PosixException {
+        checkNotInPreInitialization();
+        nativeLib.signalSelf(nativePosixSupport, signal);
     }
 
     @ExportMessage

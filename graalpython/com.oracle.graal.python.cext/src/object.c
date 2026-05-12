@@ -1,4 +1,4 @@
-/* Copyright (c) 2018, 2025, Oracle and/or its affiliates.
+/* Copyright (c) 2018, 2026, Oracle and/or its affiliates.
  * Copyright (C) 1996-2022 Python Software Foundation
  *
  * Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
@@ -1776,7 +1776,6 @@ PyObject_GenericSetDict(PyObject *obj, PyObject *value, void *context)
 }
 
 
-#if 0 // GraalPy change
 /* Test a value used as condition, e.g., in a while or if statement.
    Return -1 if an error occurred */
 
@@ -1790,6 +1789,9 @@ PyObject_IsTrue(PyObject *v)
         return 0;
     if (v == Py_None)
         return 0;
+    // GraalPy change: upcall for managed objects
+    if (points_to_py_handle_space(v))
+        return GraalPyPrivate_Object_IsTrue(v);
     else if (Py_TYPE(v)->tp_as_number != NULL &&
              Py_TYPE(v)->tp_as_number->nb_bool != NULL)
         res = (*Py_TYPE(v)->tp_as_number->nb_bool)(v);
@@ -1804,7 +1806,6 @@ PyObject_IsTrue(PyObject *v)
     /* if it is negative, it should be either -1 or -2 */
     return (res > 0) ? 1 : Py_SAFE_DOWNCAST(res, Py_ssize_t, int);
 }
-#endif // GraalPy change
 
 /* equivalent of 'not v'
    Return -1 if an error occurred */
@@ -1819,7 +1820,6 @@ PyObject_Not(PyObject *v)
     return res == 0;
 }
 
-#if 0 // GraalPy change
 /* Test whether an object can be called */
 
 int
@@ -1830,6 +1830,7 @@ PyCallable_Check(PyObject *x)
     return Py_TYPE(x)->tp_call != NULL;
 }
 
+#if 0 // GraalPy change
 
 /* Helper for PyObject_Dir without arguments: returns the local scope. */
 static PyObject *
@@ -2741,14 +2742,18 @@ _PyObject_AssertFailed(PyObject *obj, const char *expr, const char *msg,
     Py_FatalError("_PyObject_AssertFailed");
 }
 
-
 void
 _Py_Dealloc(PyObject *op)
 {
+    if (points_to_py_handle_space(op) && _PyObject_IS_GC(op)) {
+        GraalPyPrivate_ManagedObject_GC_Del(op);
+        return;
+    }
+
+    PyThreadState *tstate = _PyThreadState_GET();
     PyTypeObject *type = Py_TYPE(op);
     destructor dealloc = type->tp_dealloc;
 #ifdef Py_DEBUG
-    PyThreadState *tstate = _PyThreadState_GET();
     PyObject *old_exc = tstate != NULL ? tstate->current_exception : NULL;
     // Keep the old exception type alive to prevent undefined behavior
     // on (tstate->curexc_type != old_exc_type) below
@@ -2760,7 +2765,13 @@ _Py_Dealloc(PyObject *op)
 #ifdef Py_TRACE_REFS
     _Py_ForgetReference(op);
 #endif
+    if (tstate != NULL) {
+        graalpy_dealloc_stack_push(tstate, op);
+    }
     (*dealloc)(op);
+    if (tstate != NULL) {
+        graalpy_dealloc_stack_pop(tstate, op);
+    }
 
 #ifdef Py_DEBUG
     // gh-89373: The tp_dealloc function must leave the current exception
@@ -2855,7 +2866,7 @@ Py_ssize_t Py_REFCNT(PyObject *obj) {
         }
         res = pointer_to_stub(obj)->ob_refcnt;
 #ifndef NDEBUG
-        if (GraalPyPrivate_Debug_CAPI() && GraalPyPrivate_GET_PyObject_ob_refcnt(obj) != res)
+        if (GraalPyPrivate_Debug_CAPI() && GraalPyPrivate_Get_PyObject_ob_refcnt(obj) != res)
         {
             Py_FatalError("Refcount of native stub and managed object differ");
         }
@@ -2960,7 +2971,7 @@ void
 GraalPy_SET_TYPE(PyObject *a, PyTypeObject *b)
 {
     if (points_to_py_handle_space(a)) {
-        GraalPyPrivate_Log(PY_TRUFFLE_LOG_INFO,
+        GraalPyPrivate_Log(GRAALPY_LOG_INFO,
                 "changing the type of an object is not supported\n");
     } else {
         a->ob_type = b;
@@ -2998,8 +3009,7 @@ _decref_notify(const PyObject *op, const Py_ssize_t updated_refcnt)
             GraalPyPrivate_BulkNotifyRefCount(deferred_notify_ops, DEFERRED_NOTIFY_SIZE);
         }
 #else
-        PyObject *nonConstOp = (PyObject *)op;
-        GraalPyPrivate_BulkNotifyRefCount(&nonConstOp, 1);
+        GraalPyPrivate_NotifyRefCount((PyObject *) op, updated_refcnt);
 #endif
     }
 }

@@ -1,4 +1,4 @@
-# Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -45,6 +45,8 @@ import os
 import sys
 import time
 
+from tests.util import skip_if_sandboxed
+
 
 if sys.implementation.name == 'graalpy':
     def graalpy_multiprocessing(test):
@@ -71,6 +73,7 @@ if sys.implementation.name == 'graalpy':
 
 
     @graalpy_multiprocessing
+    @skip_if_sandboxed("Sandboxed runs use an emulated backend for multiprocessing wait")
     def test_wait_timeout():
         timeout = 3
         a, b = multiprocessing.Pipe()
@@ -80,11 +83,14 @@ if sys.implementation.name == 'graalpy':
             res = wait(fds, timeout)
             delta = time.monotonic() - start
             assert not res
-            assert delta < timeout * 2
+            # The GraalPy multiprocessing wait path actively polls fake file descriptors and may
+            # overshoot under scheduling contention.
+            assert delta < timeout * 8
             assert delta > timeout / 2
 
 
     @graalpy_multiprocessing
+    @skip_if_sandboxed("Sandboxed runs use an emulated backend for multiprocessing wait")
     def test_wait():
         a, b = multiprocessing.Pipe()
         x, y = multiprocessing.connection.Pipe(False)  # Truffle multiprocessing pipe

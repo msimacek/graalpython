@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,28 +40,50 @@
  */
 package com.oracle.graal.python.builtins.modules.datetime;
 
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ValueError;
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ZeroDivisionError;
+import static com.oracle.graal.python.nodes.BuiltinNames.T_MAX;
+import static com.oracle.graal.python.nodes.BuiltinNames.T_MIN;
+import static com.oracle.graal.python.nodes.BuiltinNames.T_RESOLUTION;
+import static com.oracle.graal.python.nodes.BuiltinNames.T__DATETIME;
+import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE__;
+import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
+import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
+
+import java.math.BigInteger;
+import java.util.List;
+
 import com.oracle.graal.python.PythonLanguage;
-import com.oracle.graal.python.annotations.Slot;
 import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.Python3Core;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
+import com.oracle.graal.python.builtins.modules.datetime.TemporalValueNodes.TimeDeltaValue;
 import com.oracle.graal.python.builtins.objects.PNotImplemented;
-import com.oracle.graal.python.builtins.objects.floats.PFloat;
+import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
+import com.oracle.graal.python.builtins.objects.ints.PInt;
 import com.oracle.graal.python.builtins.objects.module.PythonModule;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
 import com.oracle.graal.python.builtins.objects.type.PythonBuiltinClass;
 import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
 import com.oracle.graal.python.builtins.objects.type.slots.TpSlotBinaryOp.BinaryOpBuiltinNode;
 import com.oracle.graal.python.builtins.objects.type.slots.TpSlotHashFun;
 import com.oracle.graal.python.builtins.objects.type.slots.TpSlotInquiry;
 import com.oracle.graal.python.builtins.objects.type.slots.TpSlotRichCompare.RichCmpBuiltinNode;
-import com.oracle.graal.python.lib.PyFloatCheckExactNode;
-import com.oracle.graal.python.lib.PyLongAsIntNode;
+import com.oracle.graal.python.lib.PyDeltaCheckNode;
+import com.oracle.graal.python.lib.PyFloatCheckNode;
 import com.oracle.graal.python.lib.PyLongCheckNode;
-import com.oracle.graal.python.lib.PyNumberDivmodNode;
+import com.oracle.graal.python.lib.PyNumberAddNode;
+import com.oracle.graal.python.lib.PyNumberFloorDivideNode;
 import com.oracle.graal.python.lib.PyNumberMultiplyNode;
+import com.oracle.graal.python.lib.PyNumberRemainderNode;
+import com.oracle.graal.python.lib.PyNumberTrueDivideNode;
 import com.oracle.graal.python.lib.PyObjectCallMethodObjArgs;
 import com.oracle.graal.python.lib.PyObjectHashNode;
 import com.oracle.graal.python.lib.PyTupleGetItem;
@@ -73,35 +95,19 @@ import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.object.GetClassNode;
-import com.oracle.graal.python.nodes.util.CastToJavaDoubleNode;
-import com.oracle.graal.python.nodes.util.CastToJavaLongExactNode;
+import com.oracle.graal.python.nodes.util.CastToJavaBigIntegerNode;
 import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.Cached.Shared;
-import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.nodes.EncapsulatingNodeReference;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
-
-import java.util.List;
-
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.OverflowError;
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ValueError;
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ZeroDivisionError;
-import static com.oracle.graal.python.nodes.BuiltinNames.T__DATETIME;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE__;
-import static com.oracle.graal.python.nodes.BuiltinNames.T_MAX;
-import static com.oracle.graal.python.nodes.BuiltinNames.T_MIN;
-import static com.oracle.graal.python.nodes.BuiltinNames.T_RESOLUTION;
-import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
-import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PTimeDelta)
 public final class TimeDeltaBuiltins extends PythonBuiltins {
@@ -137,8 +143,8 @@ public final class TimeDeltaBuiltins extends PythonBuiltins {
         self.setAttribute(T_RESOLUTION, resolution);
     }
 
-    @Slot(value = Slot.SlotKind.tp_new, isComplex = true)
-    @Slot.SlotSignature(name = "datetime.timedelta", minNumOfPositionalArgs = 1, parameterNames = {"$cls", "days", "seconds", "microseconds", "milliseconds", "minutes", "hours", "weeks"})
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "datetime.timedelta", minNumOfPositionalArgs = 1, parameterNames = {"$cls", "days", "seconds", "microseconds", "milliseconds", "minutes", "hours", "weeks"})
     @GenerateNodeFactory
     public abstract static class NewNode extends PythonBuiltinNode {
 
@@ -150,27 +156,33 @@ public final class TimeDeltaBuiltins extends PythonBuiltins {
         }
     }
 
-    @Slot(Slot.SlotKind.nb_bool)
+    @Slot(SlotKind.nb_bool)
     @GenerateUncached
     @GenerateNodeFactory
     abstract static class BoolNode extends TpSlotInquiry.NbBoolBuiltinNode {
 
         @Specialization
-        static boolean bool(PTimeDelta self) {
+        static boolean bool(Object selfObj,
+                        @Bind Node inliningTarget,
+                        @Cached TemporalValueNodes.GetTimeDeltaValue readTimeDeltaValueNode) {
+            TimeDeltaValue self = readTimeDeltaValueNode.execute(inliningTarget, selfObj);
             return self.days != 0 || self.seconds != 0 || self.microseconds != 0;
         }
     }
 
-    @Slot(value = Slot.SlotKind.tp_repr, isComplex = true)
+    @Slot(value = SlotKind.tp_repr, isComplex = true)
     @GenerateNodeFactory
     public abstract static class ReprNode extends PythonUnaryBuiltinNode {
 
         @Specialization
         @TruffleBoundary
-        static TruffleString repr(PTimeDelta self) {
+        static TruffleString repr(Object selfObj) {
+            TimeDeltaValue self = TemporalValueNodes.GetTimeDeltaValue.executeUncached(null, selfObj);
             var builder = new StringBuilder();
 
-            builder.append("datetime.timedelta(");
+            builder.append(TypeNodes.GetTpNameNode.executeUncached(GetClassNode.executeUncached(selfObj)));
+
+            builder.append("(");
 
             if (self.days != 0 || self.seconds != 0 || self.microseconds != 0) {
                 if (self.days != 0) {
@@ -206,13 +218,15 @@ public final class TimeDeltaBuiltins extends PythonBuiltins {
         }
     }
 
-    @Slot(value = Slot.SlotKind.tp_str, isComplex = true)
+    @Slot(value = SlotKind.tp_str, isComplex = true)
     @GenerateNodeFactory
     public abstract static class StrNode extends PythonUnaryBuiltinNode {
 
         @Specialization
         @TruffleBoundary
-        static TruffleString str(PTimeDelta self) {
+        static TruffleString str(Object selfObj,
+                        @Bind Node inliningTarget) {
+            TimeDeltaValue self = TemporalValueNodes.GetTimeDeltaValue.executeUncached(inliningTarget, selfObj);
             var builder = new StringBuilder();
 
             // optional prefix with days, e.g. '1 day' or '5 days'
@@ -253,420 +267,379 @@ public final class TimeDeltaBuiltins extends PythonBuiltins {
     public abstract static class ReduceNode extends PythonUnaryBuiltinNode {
 
         @Specialization
-        static Object reduce(PTimeDelta self,
+        static Object reduce(Object selfObj,
                         @Bind Node inliningTarget,
                         @Bind PythonLanguage language,
-                        @Cached GetClassNode getClassNode) {
-            Object type = getClassNode.execute(inliningTarget, self);
+                        @Cached GetClassNode getClassNode,
+                        @Cached TemporalValueNodes.GetTimeDeltaValue readTimeDeltaValueNode) {
+            TimeDeltaValue self = readTimeDeltaValueNode.execute(inliningTarget, selfObj);
+            Object type = getClassNode.execute(inliningTarget, selfObj);
             PTuple arguments = PFactory.createTuple(language, new Object[]{self.days, self.seconds, self.microseconds});
             return PFactory.createTuple(language, new Object[]{type, arguments});
         }
     }
 
-    @Slot(value = Slot.SlotKind.tp_richcompare, isComplex = true)
+    @Slot(value = SlotKind.tp_richcompare, isComplex = true)
     @GenerateNodeFactory
     abstract static class RichCmpNode extends RichCmpBuiltinNode {
 
         @Specialization
-        static Object richCmp(PTimeDelta self, PTimeDelta other, RichCmpOp op) {
+        static Object richCmp(Object left, Object right, RichCmpOp op,
+                        @Bind Node inliningTarget,
+                        @Cached PyDeltaCheckNode checkNode,
+                        @Cached TemporalValueNodes.GetTimeDeltaValue readTimeDeltaValueNode) {
+            if (!checkNode.execute(inliningTarget, left) || !checkNode.execute(inliningTarget, right)) {
+                return PNotImplemented.NOT_IMPLEMENTED;
+            }
+            TimeDeltaValue self = readTimeDeltaValueNode.execute(inliningTarget, left);
+            TimeDeltaValue other = readTimeDeltaValueNode.execute(inliningTarget, right);
             int result = self.compareTo(other);
             return op.compareResultToBool(result);
         }
-
-        @Fallback
-        static PNotImplemented richCmp(Object self, Object other, RichCmpOp op) {
-            return PNotImplemented.NOT_IMPLEMENTED;
-        }
     }
 
-    @Slot(value = Slot.SlotKind.tp_hash, isComplex = true)
+    @Slot(value = SlotKind.tp_hash, isComplex = true)
     @GenerateNodeFactory
     abstract static class HashNode extends TpSlotHashFun.HashBuiltinNode {
 
         @Specialization
-        static long hash(VirtualFrame frame, PTimeDelta self,
+        static long hash(VirtualFrame frame, Object selfObj,
                         @Bind Node inliningTarget,
                         @Bind PythonLanguage language,
-                        @Cached PyObjectHashNode hashNode) {
+                        @Cached PyObjectHashNode hashNode,
+                        @Cached TemporalValueNodes.GetTimeDeltaValue readTimeDeltaValueNode) {
+            TimeDeltaValue self = readTimeDeltaValueNode.execute(inliningTarget, selfObj);
             var content = new int[]{self.days, self.seconds, self.microseconds};
             return hashNode.execute(frame, inliningTarget, PFactory.createTuple(language, content));
         }
     }
 
-    @Slot(value = Slot.SlotKind.nb_add, isComplex = true)
+    @Slot(value = SlotKind.nb_add, isComplex = true)
     @GenerateUncached
     @GenerateNodeFactory
     abstract static class AddNode extends BinaryOpBuiltinNode {
 
         @Specialization
-        static Object add(PTimeDelta self, PTimeDelta other,
+        static Object add(Object left, Object right,
                         @Bind Node inliningTarget,
-                        @Cached TimeDeltaNodes.NewNode newNode) {
-            Object type = PythonBuiltinClassType.PTimeDelta;
-            return newNode.execute(inliningTarget, type, self.days + other.days, self.seconds + other.seconds, self.microseconds + other.microseconds, 0, 0, 0, 0);
-        }
-
-        @Fallback
-        Object addObject(Object self, Object other) {
-            return PNotImplemented.NOT_IMPLEMENTED;
+                        @Cached TimeDeltaNodes.NewNode newNode,
+                        @Cached PyDeltaCheckNode checkNode,
+                        @Cached TemporalValueNodes.GetTimeDeltaValue readTimeDeltaValueNode) {
+            if (!checkNode.execute(inliningTarget, left) || !checkNode.execute(inliningTarget, right)) {
+                return PNotImplemented.NOT_IMPLEMENTED;
+            }
+            TimeDeltaValue self = readTimeDeltaValueNode.execute(inliningTarget, left);
+            TimeDeltaValue other = readTimeDeltaValueNode.execute(inliningTarget, right);
+            return newNode.executeBuiltin(inliningTarget, self.days + other.days, self.seconds + other.seconds, self.microseconds + other.microseconds, 0, 0, 0, 0);
         }
     }
 
-    @Slot(value = Slot.SlotKind.nb_subtract, isComplex = true)
+    @Slot(value = SlotKind.nb_subtract, isComplex = true)
     @GenerateUncached
     @GenerateNodeFactory
     abstract static class SubNode extends BinaryOpBuiltinNode {
 
         @Specialization
-        static Object sub(PTimeDelta self, PTimeDelta other,
+        static Object sub(Object left, Object rigth,
                         @Bind Node inliningTarget,
-                        @Cached TimeDeltaNodes.NewNode newNode) {
-            Object type = PythonBuiltinClassType.PTimeDelta;
-            return newNode.execute(inliningTarget, type, self.days - other.days, self.seconds - other.seconds, self.microseconds - other.microseconds, 0, 0, 0, 0);
-        }
-
-        @Fallback
-        Object subObject(Object self, Object other) {
-            return PNotImplemented.NOT_IMPLEMENTED;
+                        @Cached TimeDeltaNodes.NewNode newNode,
+                        @Cached PyDeltaCheckNode checkNode,
+                        @Cached TemporalValueNodes.GetTimeDeltaValue readTimeDeltaValueNode) {
+            if (!checkNode.execute(inliningTarget, left) || !checkNode.execute(inliningTarget, rigth)) {
+                return PNotImplemented.NOT_IMPLEMENTED;
+            }
+            TimeDeltaValue self = readTimeDeltaValueNode.execute(inliningTarget, left);
+            TimeDeltaValue other = readTimeDeltaValueNode.execute(inliningTarget, rigth);
+            return newNode.executeBuiltin(inliningTarget, self.days - other.days, self.seconds - other.seconds, self.microseconds - other.microseconds, 0, 0, 0, 0);
         }
     }
 
-    @Slot(value = Slot.SlotKind.nb_multiply, isComplex = true)
+    @TruffleBoundary
+    private static PInt divideNearest(Node node, Object a, Object b) {
+        EncapsulatingNodeReference encapsulating = EncapsulatingNodeReference.getCurrent();
+        Node encapsulatingNode = encapsulating.set(node);
+        try {
+            BigInteger dividend = CastToJavaBigIntegerNode.executeUncached(a);
+            BigInteger divisor = CastToJavaBigIntegerNode.executeUncached(b);
+            if (divisor.equals(BigInteger.ZERO)) {
+                throw PRaiseNode.raiseStatic(node, ZeroDivisionError, ErrorMessages.INTEGER_DIVISION_OR_MODULO_BY_ZERO);
+            }
+            BigInteger[] qr = dividend.divideAndRemainder(divisor);
+            BigInteger quotient = qr[0];
+            BigInteger remainder = qr[1];
+
+            // Scale to compare (remainder * 2)
+            BigInteger doubleRemainder = remainder.abs().multiply(BigInteger.valueOf(2));
+            int cmp = doubleRemainder.compareTo(divisor.abs());
+
+            BigInteger result;
+
+            if (cmp < 0) {
+                // Remainder < 0.5, round down (do nothing)
+                result = quotient;
+            } else {
+                BigInteger addend = dividend.signum() == divisor.signum() ? BigInteger.ONE : BigInteger.ONE.negate();
+                if (cmp > 0) {
+                    // Remainder > 0.5, round up
+                    result = quotient.add(addend);
+                } else {
+                    // Exactly halfway
+                    // If quotient is even, return quotient
+                    // If odd, round to nearest even (add or subtract 1)
+                    if (quotient.mod(BigInteger.valueOf(2)).equals(BigInteger.ZERO)) {
+                        result = quotient;
+                    } else {
+                        result = quotient.add(addend);
+                    }
+                }
+            }
+            return PFactory.createInt(PythonLanguage.get(null), result);
+        } finally {
+            encapsulating.set(encapsulatingNode);
+        }
+    }
+
+    @Slot(value = SlotKind.nb_multiply, isComplex = true)
     @GenerateUncached
     @GenerateNodeFactory
     abstract static class MulNode extends BinaryOpBuiltinNode {
 
         @Specialization
-        static Object mul(VirtualFrame frame, PTimeDelta self, Object other,
+        static Object mul(VirtualFrame frame, Object left, Object right,
                         @Bind Node inliningTarget,
-                        @Cached @Shared PRaiseNode raiseNode,
-                        @Cached @Shared PyLongCheckNode longCheckNode,
-                        @Cached @Shared CastToJavaLongExactNode castToJavaLongExactNode,
-                        @Cached @Shared PyFloatCheckExactNode floatCheckExactNode,
-                        @Cached @Shared CastToJavaDoubleNode castToJavaDoubleNode,
-                        @Cached @Shared PyObjectCallMethodObjArgs callMethodObjArgs,
-                        @Cached @Shared PyTupleGetItem tupleGetItem,
-                        @Cached @Shared PyNumberMultiplyNode numberMultiplyNode,
-                        @Cached @Shared PyNumberDivmodNode numberDivmodNode,
-                        @Cached @Shared PyLongAsIntNode asIntNode,
-                        @Cached @Shared TimeDeltaNodes.NewNode newNode) {
+                        @Cached PRaiseNode raiseNode,
+                        @Cached PyLongCheckNode longCheckNode,
+                        @Cached PyFloatCheckNode floatCheckNode,
+                        @Cached PyObjectCallMethodObjArgs callMethodObjArgs,
+                        @Cached PyTupleGetItem tupleGetItem,
+                        @Cached PyNumberAddNode addNode,
+                        @Cached PyNumberMultiplyNode multiplyNode,
+                        @Cached TimeDeltaNodes.NewNode newNode,
+                        @Cached PyDeltaCheckNode checkNode,
+                        @Cached TemporalValueNodes.GetTimeDeltaValue readTimeDeltaValueNode) {
+            TimeDeltaValue date;
+            Object other;
+            if (checkNode.execute(inliningTarget, left)) {
+                date = readTimeDeltaValueNode.execute(inliningTarget, left);
+                other = right;
+            } else {
+                date = readTimeDeltaValueNode.execute(inliningTarget, right);
+                other = left;
+            }
             if (longCheckNode.execute(inliningTarget, other)) {
-                long i = castToJavaLongExactNode.execute(inliningTarget, other);
+                Object selfAsMicroseconds = toMicroseconds(date, addNode, multiplyNode);
+                Object microseconds = multiplyNode.execute(null, selfAsMicroseconds, other);
 
-                Object type = PythonBuiltinClassType.PTimeDelta;
-                return newNode.execute(inliningTarget, type, self.days * i, self.seconds * i, self.microseconds * i, 0, 0, 0, 0);
-            } else if (floatCheckExactNode.execute(inliningTarget, other)) {
-                double d = castToJavaDoubleNode.execute(inliningTarget, other);
-
-                if (Double.isNaN(d)) {
-                    throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.CANNOT_CONVERT_S_TO_INT_RATIO, "NaN");
-                }
-
-                if (Double.isInfinite(d)) {
-                    throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.CANNOT_CONVERT_S_TO_INT_RATIO, "Infinity");
-                }
-
-                Object type = PythonBuiltinClassType.PTimeDelta;
-                return newNode.execute(inliningTarget, type, self.days * d, self.seconds * d, self.microseconds * d, 0, 0, 0, 0);
-            } else if (other instanceof PFloat) {
-                // it's a float's subclass - so treat it in a generic way
-
-                long selfAsMicroseconds = toMicroseconds(self);
+                return newNode.executeBuiltin(inliningTarget, 0, 0, microseconds, 0, 0, 0, 0);
+            } else if (floatCheckNode.execute(inliningTarget, other)) {
+                Object selfAsMicroseconds = toMicroseconds(date, addNode, multiplyNode);
 
                 Object ratioTuple = callMethodObjArgs.execute(frame, inliningTarget, other, T_AS_INTEGER_RATIO);
-                validateAsIntegerRationResult(ratioTuple, inliningTarget, raiseNode);
+                validateAsIntegerRatioResult(ratioTuple, inliningTarget, raiseNode);
 
                 Object numerator = tupleGetItem.execute(inliningTarget, ratioTuple, 0);
                 Object denominator = tupleGetItem.execute(inliningTarget, ratioTuple, 1);
 
-                Object multiplyingResult = numberMultiplyNode.execute(frame, selfAsMicroseconds, numerator);
-                Object divmodResult = numberDivmodNode.execute(frame, multiplyingResult, denominator);
-                // TODO: use half-even rounding (see divide_nearest)
-                Object divResult = tupleGetItem.execute(inliningTarget, divmodResult, 0);
+                Object multiplyResult = multiplyNode.execute(frame, selfAsMicroseconds, numerator);
+                PInt microseconds = divideNearest(inliningTarget, multiplyResult, denominator);
 
-                Object secondsAndMicrosecondsTuple = numberDivmodNode.execute(frame, divResult, 1_000_000);
-                validateDivModResult(secondsAndMicrosecondsTuple, inliningTarget, raiseNode);
-
-                Object secondsObject = tupleGetItem.execute(inliningTarget, secondsAndMicrosecondsTuple, 0);
-                Object microsecondsObject = tupleGetItem.execute(inliningTarget, secondsAndMicrosecondsTuple, 1);
-
-                int seconds = asIntNode.execute(frame, inliningTarget, secondsObject);
-                int microseconds = asIntNode.execute(frame, inliningTarget, microsecondsObject);
-
-                Object type = PythonBuiltinClassType.PTimeDelta;
-                return newNode.execute(inliningTarget, type, 0, seconds, microseconds, 0, 0, 0, 0);
+                return newNode.executeBuiltin(inliningTarget, 0, 0, microseconds, 0, 0, 0, 0);
             } else {
                 return PNotImplemented.NOT_IMPLEMENTED;
             }
         }
-
-        @Specialization
-        static Object rmul(VirtualFrame frame, Object other, PTimeDelta self,
-                        @Bind Node inliningTarget,
-                        @Cached @Shared PRaiseNode raiseNode,
-                        @Cached @Shared PyLongCheckNode longCheckNode,
-                        @Cached @Shared CastToJavaLongExactNode castToJavaLongExactNode,
-                        @Cached @Shared PyFloatCheckExactNode floatCheckExactNode,
-                        @Cached @Shared CastToJavaDoubleNode castToJavaDoubleNode,
-                        @Cached @Shared PyObjectCallMethodObjArgs callMethodObjArgs,
-                        @Cached @Shared PyTupleGetItem tupleGetItem,
-                        @Cached @Shared PyNumberMultiplyNode numberMultiplyNode,
-                        @Cached @Shared PyNumberDivmodNode numberDivmodNode,
-                        @Cached @Shared PyLongAsIntNode asIntNode,
-                        @Cached @Shared TimeDeltaNodes.NewNode newNode) {
-            return mul(frame, self, other, inliningTarget, raiseNode, longCheckNode, castToJavaLongExactNode, floatCheckExactNode, castToJavaDoubleNode, callMethodObjArgs, tupleGetItem,
-                            numberMultiplyNode, numberDivmodNode, asIntNode, newNode);
-        }
-
-        @Fallback
-        static Object divObject(Object self, Object other) {
-            return PNotImplemented.NOT_IMPLEMENTED;
-        }
     }
 
-    @Slot(value = Slot.SlotKind.nb_true_divide, isComplex = true)
+    @Slot(value = SlotKind.nb_true_divide, isComplex = true)
     @GenerateUncached
     @GenerateNodeFactory
     abstract static class DivNode extends BinaryOpBuiltinNode {
 
         @Specialization
-        static Object div(VirtualFrame frame, PTimeDelta self, Object other,
+        static Object div(VirtualFrame frame, Object left, Object right,
                         @Bind Node inliningTarget,
                         @Cached PRaiseNode raiseNode,
                         @Cached PyLongCheckNode longCheckNode,
-                        @Cached CastToJavaLongExactNode castToJavaLongExactNode,
-                        @Cached PyFloatCheckExactNode floatCheckExactNode,
-                        @Cached CastToJavaDoubleNode castToJavaDoubleNode,
+                        @Cached PyFloatCheckNode floatCheckNode,
                         @Cached PyObjectCallMethodObjArgs callMethodObjArgs,
                         @Cached PyTupleGetItem tupleGetItem,
-                        @Cached PyNumberMultiplyNode numberMultiplyNode,
-                        @Cached PyNumberDivmodNode numberDivmodNode,
-                        @Cached PyLongAsIntNode asIntNode,
-                        @Cached TimeDeltaNodes.NewNode newNode) {
-            if (other instanceof PTimeDelta otherTimeDelta) {
-                long microsecondsSelf = toMicroseconds(self);
-                long microsecondsOther = toMicroseconds(otherTimeDelta);
+                        @Cached PyNumberAddNode addNode,
+                        @Cached PyNumberMultiplyNode multiplyNode,
+                        @Cached PyNumberTrueDivideNode trueDivideNode,
+                        @Cached TimeDeltaNodes.NewNode newNode,
+                        @Cached PyDeltaCheckNode checkLeft,
+                        @Cached PyDeltaCheckNode checkRight,
+                        @Cached TemporalValueNodes.GetTimeDeltaValue readTimeDeltaValueNode) {
+            if (!checkLeft.execute(inliningTarget, left)) {
+                return PNotImplemented.NOT_IMPLEMENTED;
+            }
+            TimeDeltaValue self = readTimeDeltaValueNode.execute(inliningTarget, left);
+            if (checkRight.execute(inliningTarget, right)) {
+                TimeDeltaValue otherTimeDelta = readTimeDeltaValueNode.execute(inliningTarget, right);
+                Object microsecondsSelf = toMicroseconds(self, addNode, multiplyNode);
+                Object microsecondsOther = toMicroseconds(otherTimeDelta, addNode, multiplyNode);
+                return trueDivideNode.execute(frame, microsecondsSelf, microsecondsOther);
+            } else if (longCheckNode.execute(inliningTarget, right)) {
+                Object microseconds = toMicroseconds(self, addNode, multiplyNode);
+                microseconds = divideNearest(inliningTarget, microseconds, right);
+                return newNode.executeBuiltin(inliningTarget, 0, 0, microseconds, 0, 0, 0, 0);
+            } else if (floatCheckNode.execute(inliningTarget, right)) {
+                Object selfAsMicroseconds = toMicroseconds(self, addNode, multiplyNode);
 
-                if (microsecondsOther == 0) {
-                    throw raiseNode.raise(inliningTarget, ZeroDivisionError, ErrorMessages.INTEGER_DIVISION_OR_MODULE_BY_ZERO);
-                }
+                Object ratioTuple = callMethodObjArgs.execute(frame, inliningTarget, right, T_AS_INTEGER_RATIO);
+                validateAsIntegerRatioResult(ratioTuple, inliningTarget, raiseNode);
 
-                return (double) microsecondsSelf / microsecondsOther;
-            } else if (longCheckNode.execute(inliningTarget, other)) {
-                long i = castToJavaLongExactNode.execute(inliningTarget, other);
+                Object numerator = tupleGetItem.execute(inliningTarget, ratioTuple, 1);
+                Object denominator = tupleGetItem.execute(inliningTarget, ratioTuple, 0);
 
-                if (i == 0) {
-                    throw raiseNode.raise(inliningTarget, ZeroDivisionError, ErrorMessages.INTEGER_DIVISION_OR_MODULE_BY_ZERO);
-                }
+                Object multiplyResult = multiplyNode.execute(frame, selfAsMicroseconds, numerator);
+                PInt microseconds = divideNearest(inliningTarget, multiplyResult, denominator);
 
-                long microseconds = toMicroseconds(self);
-                Object type = PythonBuiltinClassType.PTimeDelta;
-                return newNode.execute(inliningTarget, type, 0, 0, (double) microseconds / i, 0, 0, 0, 0);
-            } else if (floatCheckExactNode.execute(inliningTarget, other)) {
-                double d = castToJavaDoubleNode.execute(inliningTarget, other);
-
-                if (Double.isNaN(d)) {
-                    throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.CANNOT_CONVERT_S_TO_INT_RATIO, "NaN");
-                }
-
-                if (Double.isInfinite(d)) {
-                    throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.CANNOT_CONVERT_S_TO_INT_RATIO, "Infinity");
-                }
-
-                if (Math.abs(d) < 2 * Double.MIN_VALUE) {
-                    // d = 0.0
-                    throw raiseNode.raise(inliningTarget, ZeroDivisionError, ErrorMessages.INTEGER_DIVISION_OR_MODULE_BY_ZERO);
-                }
-
-                long microseconds = toMicroseconds(self);
-
-                // mimic CPython behavior
-                double ratio = (double) microseconds / d;
-                if (ratio > Long.MAX_VALUE || ratio < Long.MIN_VALUE) {
-                    throw raiseNode.raise(inliningTarget, OverflowError, ErrorMessages.PYTHON_INT_TOO_LARGE_TO_CONVERT_TO_C_INT);
-                }
-
-                Object type = PythonBuiltinClassType.PTimeDelta;
-                return newNode.execute(inliningTarget, type, 0, 0, ratio, 0, 0, 0, 0);
-            } else if (other instanceof PFloat) {
-                // it's a float's subclass - so treat it in a generic way
-
-                long selfAsMicroseconds = toMicroseconds(self);
-
-                Object ratioTuple = callMethodObjArgs.execute(frame, inliningTarget, other, T_AS_INTEGER_RATIO);
-                validateAsIntegerRationResult(ratioTuple, inliningTarget, raiseNode);
-
-                Object numerator = tupleGetItem.execute(inliningTarget, ratioTuple, 0);
-                Object denominator = tupleGetItem.execute(inliningTarget, ratioTuple, 1);
-
-                Object multiplyingResult = numberMultiplyNode.execute(frame, selfAsMicroseconds, denominator);
-                Object divmodResult = numberDivmodNode.execute(frame, multiplyingResult, numerator);
-                // TODO: use half-even rounding (see divide_nearest)
-                Object divResult = tupleGetItem.execute(inliningTarget, divmodResult, 0);
-
-                Object secondsAndMicrosecondsTuple = numberDivmodNode.execute(frame, divResult, 1_000_000);
-                validateDivModResult(secondsAndMicrosecondsTuple, inliningTarget, raiseNode);
-
-                Object secondsObject = tupleGetItem.execute(inliningTarget, secondsAndMicrosecondsTuple, 0);
-                Object microsecondsObject = tupleGetItem.execute(inliningTarget, secondsAndMicrosecondsTuple, 1);
-
-                int seconds = asIntNode.execute(frame, inliningTarget, secondsObject);
-                int microseconds = asIntNode.execute(frame, inliningTarget, microsecondsObject);
-
-                Object type = PythonBuiltinClassType.PTimeDelta;
-                return newNode.execute(inliningTarget, type, 0, seconds, microseconds, 0, 0, 0, 0);
+                return newNode.executeBuiltin(inliningTarget, 0, 0, microseconds, 0, 0, 0, 0);
             } else {
                 return PNotImplemented.NOT_IMPLEMENTED;
             }
         }
-
-        @Fallback
-        static Object divObject(Object self, Object other) {
-            return PNotImplemented.NOT_IMPLEMENTED;
-        }
     }
 
-    @Slot(value = Slot.SlotKind.nb_floor_divide, isComplex = true)
+    @Slot(value = SlotKind.nb_floor_divide, isComplex = true)
     @GenerateUncached
     @GenerateNodeFactory
     abstract static class FloorDivNode extends BinaryOpBuiltinNode {
 
         @Specialization
-        static Object div(PTimeDelta self, Object other,
+        static Object div(VirtualFrame frame, Object left, Object right,
                         @Bind Node inliningTarget,
-                        @Cached PRaiseNode raiseNode,
                         @Cached PyLongCheckNode longCheckNode,
                         @Cached TimeDeltaNodes.NewNode newNode,
-                        @Cached CastToJavaLongExactNode castToJavaLongExactNode) {
-            if (other instanceof PTimeDelta otherTimeDelta) {
-                long microsecondsSelf = toMicroseconds(self);
-                long microsecondsOther = toMicroseconds(otherTimeDelta);
-
-                if (microsecondsOther == 0) {
-                    throw raiseNode.raise(inliningTarget, ZeroDivisionError, ErrorMessages.INTEGER_DIVISION_OR_MODULE_BY_ZERO);
-                }
-
-                return microsecondsSelf / microsecondsOther;
-            } else if (longCheckNode.execute(inliningTarget, other)) {
-                long i = castToJavaLongExactNode.execute(inliningTarget, other);
-
-                if (i == 0) {
-                    throw PRaiseNode.raiseStatic(inliningTarget, ZeroDivisionError, ErrorMessages.INTEGER_DIVISION_OR_MODULE_BY_ZERO);
-                }
-
-                Object type = PythonBuiltinClassType.PTimeDelta;
-                long microseconds = toMicroseconds(self);
-                return newNode.execute(inliningTarget, type, 0, 0, microseconds / i, 0, 0, 0, 0);
+                        @Cached PyNumberAddNode addNode,
+                        @Cached PyNumberMultiplyNode multiplyNode,
+                        @Cached PyNumberFloorDivideNode floorDivideNode,
+                        @Cached PyDeltaCheckNode checkLeft,
+                        @Cached PyDeltaCheckNode checkRight,
+                        @Cached TemporalValueNodes.GetTimeDeltaValue readTimeDeltaValueNode) {
+            if (!checkLeft.execute(inliningTarget, left)) {
+                return PNotImplemented.NOT_IMPLEMENTED;
+            }
+            TimeDeltaValue self = readTimeDeltaValueNode.execute(inliningTarget, left);
+            if (checkRight.execute(inliningTarget, right)) {
+                TimeDeltaValue otherTimeDelta = readTimeDeltaValueNode.execute(inliningTarget, right);
+                Object microsecondsSelf = toMicroseconds(self, addNode, multiplyNode);
+                Object microsecondsOther = toMicroseconds(otherTimeDelta, addNode, multiplyNode);
+                return floorDivideNode.execute(frame, microsecondsSelf, microsecondsOther);
+            } else if (longCheckNode.execute(inliningTarget, right)) {
+                Object microseconds = toMicroseconds(self, addNode, multiplyNode);
+                microseconds = floorDivideNode.execute(frame, microseconds, right);
+                return newNode.executeBuiltin(inliningTarget, 0, 0, microseconds, 0, 0, 0, 0);
             } else {
                 return PNotImplemented.NOT_IMPLEMENTED;
             }
         }
-
-        @Fallback
-        Object divObject(Object self, Object other) {
-            return PNotImplemented.NOT_IMPLEMENTED;
-        }
     }
 
-    @Slot(value = Slot.SlotKind.nb_divmod, isComplex = true)
+    @Slot(value = SlotKind.nb_divmod, isComplex = true)
     @GenerateNodeFactory
     abstract static class DivModNode extends BinaryOpBuiltinNode {
 
         @Specialization
         @TruffleBoundary
-        static PTuple divmod(PTimeDelta self, PTimeDelta other,
+        static Object divmod(Object left, Object right,
                         @Bind Node inliningTarget,
                         @Bind PythonLanguage language) {
-            long microsecondsSelf = toMicroseconds(self);
-            long microsecondsOther = toMicroseconds(other);
+            if (!PyDeltaCheckNode.executeUncached(left) || !PyDeltaCheckNode.executeUncached(right)) {
+                return PNotImplemented.NOT_IMPLEMENTED;
+            }
+            TimeDeltaValue self = TemporalValueNodes.GetTimeDeltaValue.executeUncached(inliningTarget, left);
+            TimeDeltaValue other = TemporalValueNodes.GetTimeDeltaValue.executeUncached(inliningTarget, right);
 
-            if (microsecondsOther == 0) {
-                throw PRaiseNode.raiseStatic(inliningTarget, ZeroDivisionError, ErrorMessages.INTEGER_DIVISION_OR_MODULE_BY_ZERO);
+            EncapsulatingNodeReference encapsulating = EncapsulatingNodeReference.getCurrent();
+            Node encapsulatingNode = encapsulating.set(inliningTarget);
+            try {
+                Object microsecondsSelf = toMicrosecondsUncached(self);
+                Object microsecondsOther = toMicrosecondsUncached(other);
+
+                Object quotient = PyNumberFloorDivideNode.getUncached().execute(null, microsecondsSelf, microsecondsOther);
+                Object remainder = PyNumberRemainderNode.getUncached().execute(null, microsecondsSelf, microsecondsOther);
+                PTimeDelta remainderTimeDelta = TimeDeltaNodes.NewNode.getUncached().executeBuiltin(inliningTarget, 0, 0, remainder, 0, 0, 0, 0);
+                Object[] arguments = new Object[]{quotient, remainderTimeDelta};
+                return PFactory.createTuple(language, arguments);
+            } finally {
+                encapsulating.set(encapsulatingNode);
             }
 
-            long quotient = Math.floorDiv(microsecondsSelf, microsecondsOther);
-            long reminder = Math.floorMod(microsecondsSelf, microsecondsOther);
-            Object type = PythonBuiltinClassType.PTimeDelta;
-            PTimeDelta reminderTimeDelta = TimeDeltaNodes.NewNode.getUncached().execute(inliningTarget, type, 0, 0, reminder, 0, 0, 0, 0);
-
-            Object[] arguments = new Object[]{quotient, reminderTimeDelta};
-            return PFactory.createTuple(language, arguments);
-        }
-
-        @Fallback
-        Object divmodObject(Object self, Object other) {
-            return PNotImplemented.NOT_IMPLEMENTED;
         }
     }
 
-    @Slot(value = Slot.SlotKind.nb_remainder, isComplex = true)
+    @Slot(value = SlotKind.nb_remainder, isComplex = true)
     @GenerateNodeFactory
     abstract static class ModNode extends BinaryOpBuiltinNode {
 
         @Specialization
         @TruffleBoundary
-        static PTimeDelta mod(PTimeDelta self, PTimeDelta other,
+        static Object mod(Object left, Object right,
                         @Bind Node inliningTarget) {
-            long microsecondsSelf = toMicroseconds(self);
-            long microsecondsOther = toMicroseconds(other);
-
-            if (microsecondsOther == 0) {
-                throw PRaiseNode.raiseStatic(inliningTarget, ZeroDivisionError, ErrorMessages.INTEGER_MODULE_BY_ZERO);
+            if (!PyDeltaCheckNode.executeUncached(left) || !PyDeltaCheckNode.executeUncached(right)) {
+                return PNotImplemented.NOT_IMPLEMENTED;
             }
-
-            long reminder = Math.floorMod(microsecondsSelf, microsecondsOther);
-            Object type = PythonBuiltinClassType.PTimeDelta;
-            return TimeDeltaNodes.NewNode.getUncached().execute(inliningTarget, type, 0, 0, reminder, 0, 0, 0, 0);
-        }
-
-        @Fallback
-        Object modObject(Object self, Object other) {
-            return PNotImplemented.NOT_IMPLEMENTED;
+            EncapsulatingNodeReference encapsulating = EncapsulatingNodeReference.getCurrent();
+            Node encapsulatingNode = encapsulating.set(inliningTarget);
+            try {
+                TimeDeltaValue self = TemporalValueNodes.GetTimeDeltaValue.executeUncached(inliningTarget, left);
+                TimeDeltaValue other = TemporalValueNodes.GetTimeDeltaValue.executeUncached(inliningTarget, right);
+                Object microsecondsSelf = toMicrosecondsUncached(self);
+                Object microsecondsOther = toMicrosecondsUncached(other);
+                Object remainder = PyNumberRemainderNode.getUncached().execute(null, microsecondsSelf, microsecondsOther);
+                return TimeDeltaNodes.NewNode.getUncached().executeBuiltin(inliningTarget, 0, 0, remainder, 0, 0, 0, 0);
+            } finally {
+                encapsulating.set(encapsulatingNode);
+            }
         }
     }
 
-    @Slot(value = Slot.SlotKind.nb_absolute, isComplex = true)
+    @Slot(value = SlotKind.nb_absolute, isComplex = true)
     @GenerateUncached
     @GenerateNodeFactory
     abstract static class AbsNode extends PythonUnaryBuiltinNode {
 
         @Specialization
-        static PTimeDelta abs(PTimeDelta self,
+        static PTimeDelta abs(PTimeDelta selfObj,
                         @Bind Node inliningTarget,
-                        @Cached TimeDeltaNodes.NewNode newNode) {
-            Object type = PythonBuiltinClassType.PTimeDelta;
-
+                        @Cached TimeDeltaNodes.NewNode newNode,
+                        @Cached TemporalValueNodes.GetTimeDeltaValue readTimeDeltaValueNode) {
+            TimeDeltaValue self = readTimeDeltaValueNode.execute(inliningTarget, selfObj);
             if (self.days >= 0) {
-                return newNode.execute(inliningTarget, type, self.days, self.seconds, self.microseconds, 0, 0, 0, 0);
+                return newNode.executeBuiltin(inliningTarget, self.days, self.seconds, self.microseconds, 0, 0, 0, 0);
             } else {
-                return newNode.execute(inliningTarget, type, -self.days, -self.seconds, -self.microseconds, 0, 0, 0, 0);
+                return newNode.executeBuiltin(inliningTarget, -self.days, -self.seconds, -self.microseconds, 0, 0, 0, 0);
             }
         }
     }
 
-    @Slot(value = Slot.SlotKind.nb_positive, isComplex = true)
+    @Slot(value = SlotKind.nb_positive, isComplex = true)
     @GenerateNodeFactory
     abstract static class PosNode extends PythonUnaryBuiltinNode {
 
         @Specialization
-        static PTimeDelta pos(PTimeDelta self,
+        static PTimeDelta pos(PTimeDelta selfObj,
                         @Bind Node inliningTarget,
-                        @Cached TimeDeltaNodes.NewNode newNode) {
-            Object type = PythonBuiltinClassType.PTimeDelta;
-            return newNode.execute(inliningTarget, type, self.days, self.seconds, self.microseconds, 0, 0, 0, 0);
+                        @Cached TimeDeltaNodes.NewNode newNode,
+                        @Cached TemporalValueNodes.GetTimeDeltaValue readTimeDeltaValueNode) {
+            TimeDeltaValue self = readTimeDeltaValueNode.execute(inliningTarget, selfObj);
+            return newNode.executeBuiltin(inliningTarget, self.days, self.seconds, self.microseconds, 0, 0, 0, 0);
         }
     }
 
-    @Slot(value = Slot.SlotKind.nb_negative, isComplex = true)
+    @Slot(value = SlotKind.nb_negative, isComplex = true)
     @GenerateNodeFactory
     abstract static class NegNode extends PythonUnaryBuiltinNode {
 
         @Specialization
-        static PTimeDelta neg(PTimeDelta self,
+        static PTimeDelta neg(Object selfObj,
                         @Bind Node inliningTarget,
-                        @Cached TimeDeltaNodes.NewNode newNode) {
-            Object type = PythonBuiltinClassType.PTimeDelta;
-            return newNode.execute(inliningTarget, type, -self.days, -self.seconds, -self.microseconds, 0, 0, 0, 0);
+                        @Cached TimeDeltaNodes.NewNode newNode,
+                        @Cached TemporalValueNodes.GetTimeDeltaValue readTimeDeltaValueNode) {
+            TimeDeltaValue self = readTimeDeltaValueNode.execute(inliningTarget, selfObj);
+            return newNode.executeBuiltin(inliningTarget, -self.days, -self.seconds, -self.microseconds, 0, 0, 0, 0);
         }
     }
 
@@ -678,6 +651,11 @@ public final class TimeDeltaBuiltins extends PythonBuiltins {
         static int getDays(PTimeDelta self) {
             return self.days;
         }
+
+        @Specialization
+        static int getDays(PythonAbstractNativeObject self) {
+            return TimeDeltaNodes.FromNative.getDays(self);
+        }
     }
 
     @Builtin(name = "seconds", minNumOfPositionalArgs = 1, isGetter = true)
@@ -687,6 +665,11 @@ public final class TimeDeltaBuiltins extends PythonBuiltins {
         @Specialization
         static int getSeconds(PTimeDelta self) {
             return self.seconds;
+        }
+
+        @Specialization
+        static int getSeconds(PythonAbstractNativeObject self) {
+            return TimeDeltaNodes.FromNative.getSeconds(self);
         }
     }
 
@@ -698,6 +681,11 @@ public final class TimeDeltaBuiltins extends PythonBuiltins {
         static int getMicroseconds(PTimeDelta self) {
             return self.microseconds;
         }
+
+        @Specialization
+        static int getMicroseconds(PythonAbstractNativeObject self) {
+            return TimeDeltaNodes.FromNative.getMicroseconds(self);
+        }
     }
 
     @Builtin(name = "total_seconds", minNumOfPositionalArgs = 1, doc = "Total seconds in the duration.")
@@ -705,43 +693,39 @@ public final class TimeDeltaBuiltins extends PythonBuiltins {
     abstract static class TotalSecondsNode extends PythonUnaryBuiltinNode {
 
         @Specialization
-        static double getTotalSeconds(PTimeDelta self) {
-            return ((double) ((long) self.days * 24 * 3600 * 1_000_000 +
-                            (long) self.seconds * 1_000_000 +
-                            (long) self.microseconds)) / 1_000_000;
+        static Object getTotalSeconds(Object selfObj,
+                        @Bind Node inliningTarget,
+                        @Cached TemporalValueNodes.GetTimeDeltaValue readTimeDeltaValueNode,
+                        @Cached PyNumberAddNode addNode,
+                        @Cached PyNumberMultiplyNode multiplyNode,
+                        @Cached PyNumberTrueDivideNode trueDivideNode) {
+            TimeDeltaValue self = readTimeDeltaValueNode.execute(inliningTarget, selfObj);
+            Object microseconds = toMicroseconds(self, addNode, multiplyNode);
+            return trueDivideNode.execute(null, microseconds, 1_000_000);
         }
     }
 
-    private static long toMicroseconds(PTimeDelta timeDelta) {
-        return (long) timeDelta.days * 24 * 3600 * 1_000_000 +
-                        (long) timeDelta.seconds * 1_000_000 +
-                        (long) timeDelta.microseconds;
+    private static Object toMicroseconds(TimeDeltaValue timeDelta, PyNumberAddNode addNode, PyNumberMultiplyNode multiplyNode) {
+        Object x = multiplyNode.execute(null, timeDelta.days, 24 * 3600);
+        x = addNode.execute(null, x, timeDelta.seconds);
+        x = multiplyNode.execute(null, x, 1_000_000);
+        return addNode.execute(null, x, timeDelta.microseconds);
+    }
+
+    private static Object toMicrosecondsUncached(TimeDeltaValue timeDelta) {
+        return toMicroseconds(timeDelta, PyNumberAddNode.getUncached(), PyNumberMultiplyNode.getUncached());
     }
 
     /**
      * Check if float.as_integer_ratio returns correct result (CPython:
      * get_float_as_integer_ratio())
      */
-    private static void validateAsIntegerRationResult(Object object, Node inliningTarget, PRaiseNode raiseNode) {
+    private static void validateAsIntegerRatioResult(Object object, Node inliningTarget, PRaiseNode raiseNode) {
         if (!(object instanceof PTuple)) {
-            throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.UNEXPECTED_RETURN_TYPE_FROM_AS_INTEGER_RATION_EXPECTED_TUPLE_GOT_P, object);
+            throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.UNEXPECTED_RETURN_TYPE_FROM_AS_INTEGER_RATIO_EXPECTED_TUPLE_GOT_P, object);
         }
         if (PyTupleSizeNode.executeUncached(object) != 2) {
             throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.AS_INTEGER_RATION_MUST_RETURN_A_2_TUPLE, object);
-        }
-    }
-
-    /**
-     * Check whether divmod() returns correct result (CPython: checked_divmod())
-     */
-    private static void validateDivModResult(Object object, Node inliningTarget, PRaiseNode raiseNode) {
-        if (!(object instanceof PTuple)) {
-            throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.DIVMOD_RETURNED_NON_TUPLE_P, object);
-        }
-
-        int tupleSize = PyTupleSizeNode.executeUncached(object);
-        if (tupleSize != 2) {
-            throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.DIVMOD_RETURNED_A_TUPLE_OF_SIZE_D, tupleSize);
         }
     }
 }

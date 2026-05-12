@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2024, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -72,6 +72,7 @@ import com.oracle.graal.python.builtins.objects.asyncio.GetAwaitableNode;
 import com.oracle.graal.python.builtins.objects.asyncio.PAsyncGenWrappedValue;
 import com.oracle.graal.python.builtins.objects.cell.PCell;
 import com.oracle.graal.python.builtins.objects.code.PCode;
+import com.oracle.graal.python.builtins.objects.common.DynamicObjectStorage;
 import com.oracle.graal.python.builtins.objects.common.EconomicMapStorage;
 import com.oracle.graal.python.builtins.objects.common.HashingStorage;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageSetItem;
@@ -102,12 +103,18 @@ import com.oracle.graal.python.builtins.objects.iterator.PIntegerSequenceIterato
 import com.oracle.graal.python.builtins.objects.iterator.PLongSequenceIterator;
 import com.oracle.graal.python.builtins.objects.iterator.PObjectSequenceIterator;
 import com.oracle.graal.python.builtins.objects.list.PList;
+import com.oracle.graal.python.builtins.objects.module.ModuleBuiltins;
+import com.oracle.graal.python.builtins.objects.module.PythonModule;
+import com.oracle.graal.python.builtins.objects.object.ObjectBuiltins;
+import com.oracle.graal.python.builtins.objects.object.PythonObject;
 import com.oracle.graal.python.builtins.objects.set.PFrozenSet;
 import com.oracle.graal.python.builtins.objects.set.PSet;
 import com.oracle.graal.python.builtins.objects.set.SetNodes;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
+import com.oracle.graal.python.builtins.objects.type.PythonManagedClass;
 import com.oracle.graal.python.builtins.objects.type.TpSlots;
 import com.oracle.graal.python.builtins.objects.type.TpSlots.GetObjectSlotsNode;
+import com.oracle.graal.python.builtins.objects.type.slots.TpSlotDescrGet.CallSlotDescrGet;
 import com.oracle.graal.python.builtins.objects.type.slots.TpSlotIterNext.CallSlotTpIterNextNode;
 import com.oracle.graal.python.builtins.objects.typing.PTypeAliasType;
 import com.oracle.graal.python.compiler.CodeUnit;
@@ -145,25 +152,26 @@ import com.oracle.graal.python.lib.PyNumberRshiftNode;
 import com.oracle.graal.python.lib.PyNumberSubtractNode;
 import com.oracle.graal.python.lib.PyNumberTrueDivideNode;
 import com.oracle.graal.python.lib.PyNumberXorNode;
-import com.oracle.graal.python.lib.PyObjectAsciiNode;
+import com.oracle.graal.python.lib.PyObjectAsciiAsObjectNode;
 import com.oracle.graal.python.lib.PyObjectCallMethodObjArgs;
 import com.oracle.graal.python.lib.PyObjectDelItem;
 import com.oracle.graal.python.lib.PyObjectFunctionStr;
 import com.oracle.graal.python.lib.PyObjectGetAttr;
 import com.oracle.graal.python.lib.PyObjectGetItem;
+import com.oracle.graal.python.lib.PyObjectGetItem.PyObjectGetItemOrNull;
 import com.oracle.graal.python.lib.PyObjectGetIter;
 import com.oracle.graal.python.lib.PyObjectGetMethod;
 import com.oracle.graal.python.lib.PyObjectHashNode;
 import com.oracle.graal.python.lib.PyObjectIsNotTrueNode;
 import com.oracle.graal.python.lib.PyObjectIsTrueNode;
 import com.oracle.graal.python.lib.PyObjectLookupAttr;
-import com.oracle.graal.python.lib.PyObjectReprAsTruffleStringNode;
+import com.oracle.graal.python.lib.PyObjectReprAsObjectNode;
 import com.oracle.graal.python.lib.PyObjectRichCompare.GenericRichCompare;
 import com.oracle.graal.python.lib.PyObjectSetAttr;
 import com.oracle.graal.python.lib.PyObjectSetAttrO;
 import com.oracle.graal.python.lib.PyObjectSetItem;
 import com.oracle.graal.python.lib.PyObjectSizeNode;
-import com.oracle.graal.python.lib.PyObjectStrAsTruffleStringNode;
+import com.oracle.graal.python.lib.PyObjectStrAsObjectNode;
 import com.oracle.graal.python.lib.PySequenceContainsNode;
 import com.oracle.graal.python.lib.RichCmpOp;
 import com.oracle.graal.python.nodes.BuiltinNames;
@@ -178,6 +186,8 @@ import com.oracle.graal.python.nodes.argument.keywords.ExpandKeywordStarargsNode
 import com.oracle.graal.python.nodes.argument.keywords.NonMappingException;
 import com.oracle.graal.python.nodes.argument.keywords.SameDictKeyException;
 import com.oracle.graal.python.nodes.attributes.GetFixedAttributeNode;
+import com.oracle.graal.python.nodes.attributes.LookupAttributeInMRONode;
+import com.oracle.graal.python.nodes.attributes.ReadAttributeFromPythonObjectNode;
 import com.oracle.graal.python.nodes.builtins.ListNodes;
 import com.oracle.graal.python.nodes.bytecode.CopyDictWithoutKeysNode;
 import com.oracle.graal.python.nodes.bytecode.GetAIterNode;
@@ -194,6 +204,7 @@ import com.oracle.graal.python.nodes.bytecode.PrintExprNode;
 import com.oracle.graal.python.nodes.bytecode.RaiseNode;
 import com.oracle.graal.python.nodes.bytecode.SetupAnnotationsNode;
 import com.oracle.graal.python.nodes.call.CallDispatchers;
+import com.oracle.graal.python.nodes.call.CallDispatchers.FunctionIndirectInvokeNode;
 import com.oracle.graal.python.nodes.call.CallNode;
 import com.oracle.graal.python.nodes.call.special.CallBinaryMethodNode;
 import com.oracle.graal.python.nodes.call.special.CallQuaternaryMethodNode;
@@ -211,13 +222,14 @@ import com.oracle.graal.python.nodes.frame.MaterializeFrameNode;
 import com.oracle.graal.python.nodes.frame.ReadBuiltinNode;
 import com.oracle.graal.python.nodes.frame.ReadFromLocalsNode;
 import com.oracle.graal.python.nodes.frame.ReadGlobalOrBuiltinNode;
-import com.oracle.graal.python.nodes.frame.ReadNameNode;
 import com.oracle.graal.python.nodes.frame.WriteGlobalNode;
 import com.oracle.graal.python.nodes.frame.WriteNameNode;
 import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinObjectProfile;
 import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.nodes.object.GetClassNode.GetPythonObjectClassNode;
 import com.oracle.graal.python.nodes.object.IsNode;
+import com.oracle.graal.python.nodes.util.CannotCastException;
+import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
 import com.oracle.graal.python.nodes.util.ExceptionStateNodes;
 import com.oracle.graal.python.runtime.ExecutionContext.CalleeContext;
 import com.oracle.graal.python.runtime.IndirectCallData.BoundaryCallData;
@@ -233,12 +245,12 @@ import com.oracle.graal.python.runtime.sequence.PSequence;
 import com.oracle.graal.python.runtime.sequence.PTupleListBase;
 import com.oracle.graal.python.runtime.sequence.storage.BoolSequenceStorage;
 import com.oracle.graal.python.runtime.sequence.storage.DoubleSequenceStorage;
-import com.oracle.graal.python.runtime.sequence.storage.EmptySequenceStorage;
 import com.oracle.graal.python.runtime.sequence.storage.IntSequenceStorage;
 import com.oracle.graal.python.runtime.sequence.storage.LongSequenceStorage;
 import com.oracle.graal.python.runtime.sequence.storage.ObjectSequenceStorage;
 import com.oracle.graal.python.runtime.sequence.storage.SequenceStorage;
 import com.oracle.graal.python.util.ArrayBuilder;
+import com.oracle.graal.python.util.InlineWeakValueProfile;
 import com.oracle.graal.python.util.PythonUtils;
 import com.oracle.truffle.api.Assumption;
 import com.oracle.truffle.api.CompilerAsserts;
@@ -248,6 +260,7 @@ import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.bytecode.BytecodeConfig;
+import com.oracle.truffle.api.bytecode.BytecodeFrame;
 import com.oracle.truffle.api.bytecode.BytecodeLocation;
 import com.oracle.truffle.api.bytecode.BytecodeNode;
 import com.oracle.truffle.api.bytecode.BytecodeRootNode;
@@ -256,6 +269,7 @@ import com.oracle.truffle.api.bytecode.ContinuationResult;
 import com.oracle.truffle.api.bytecode.ContinuationRootNode;
 import com.oracle.truffle.api.bytecode.EpilogExceptional;
 import com.oracle.truffle.api.bytecode.EpilogReturn;
+import com.oracle.truffle.api.bytecode.ForceQuickening;
 import com.oracle.truffle.api.bytecode.GenerateBytecode;
 import com.oracle.truffle.api.bytecode.Instruction;
 import com.oracle.truffle.api.bytecode.Instrumentation;
@@ -283,15 +297,16 @@ import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.exception.AbstractTruffleException;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.FrameDescriptor;
-import com.oracle.truffle.api.frame.FrameSlotTypeException;
 import com.oracle.truffle.api.frame.MaterializedFrame;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.DirectCallNode;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
-import com.oracle.truffle.api.nodes.UnexpectedResultException;
 import com.oracle.truffle.api.object.DynamicObject;
+import com.oracle.truffle.api.object.Property;
+import com.oracle.truffle.api.object.PropertyGetter;
+import com.oracle.truffle.api.object.Shape;
 import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 import com.oracle.truffle.api.source.Source;
@@ -302,13 +317,18 @@ import com.oracle.truffle.api.strings.TruffleStringBuilderUTF32;
 
 @GenerateBytecode(//
                 languageClass = PythonLanguage.class, //
+                sourceContentSupplier = "loadSourceContent", //
+                illegalLocalException = PException.class, //
+                illegalLocalExceptionFactory = "raiseUnboundLocalException", //
                 enableBlockScoping = false, //
                 enableYield = true, //
                 enableSerialization = true, //
                 enableTagInstrumentation = true, //
                 boxingEliminationTypes = {int.class}, //
-                storeBytecodeIndexInFrame = true //
-)
+                tagTreeNodeLibrary = PTagTreeNodeExports.class, //
+                storeBytecodeIndexInFrame = true, //
+                defaultUncachedThreshold = "4", //
+                enableUncachedInterpreter = true)
 @OperationProxy(PyNumberSubtractNode.class)
 @OperationProxy(PyNumberTrueDivideNode.class)
 @OperationProxy(PyNumberFloorDivideNode.class)
@@ -337,16 +357,17 @@ import com.oracle.truffle.api.strings.TruffleStringBuilderUTF32;
 @OperationProxy(PyNumberInPlaceLshiftNode.class)
 @OperationProxy(PyNumberInPlaceRshiftNode.class)
 @OperationProxy(IsNode.class)
-@OperationProxy(FormatNode.class)
+@OperationProxy(value = FormatNode.class, forceCached = true)
 @OperationProxy(ExceptMatchNode.class)
-@OperationProxy(HandleExceptionsInHandlerNode.class)
-@OperationProxy(EncapsulateExceptionGroupNode.class)
+@OperationProxy(value = HandleExceptionsInHandlerNode.class, forceCached = true)
+@OperationProxy(value = EncapsulateExceptionGroupNode.class, forceCached = true)
 @OperationProxy(GetYieldFromIterNode.class)
 @OperationProxy(GetAwaitableNode.class)
 @OperationProxy(SetupAnnotationsNode.class)
 @OperationProxy(GetAIterNode.class)
 @OperationProxy(GetANextNode.class)
-@OperationProxy(value = CopyDictWithoutKeysNode.class, name = "CopyDictWithoutKeys")
+@OperationProxy(value = ReadGlobalOrBuiltinNode.class, name = "ReadGlobal")
+@OperationProxy(value = CopyDictWithoutKeysNode.class, name = "CopyDictWithoutKeys", forceCached = true)
 @OperationProxy(value = PyObjectIsTrueNode.class, name = "Yes")
 @OperationProxy(value = PyObjectIsNotTrueNode.class, name = "Not")
 @OperationProxy(value = ListNodes.AppendNode.class, name = "ListAppend")
@@ -354,7 +375,6 @@ import com.oracle.truffle.api.strings.TruffleStringBuilderUTF32;
 @ShortCircuitOperation(name = "BoolAnd", booleanConverter = PyObjectIsTrueNode.class, operator = Operator.AND_RETURN_VALUE)
 @ShortCircuitOperation(name = "BoolOr", booleanConverter = PyObjectIsTrueNode.class, operator = Operator.OR_RETURN_VALUE)
 @ShortCircuitOperation(name = "PrimitiveBoolAnd", operator = Operator.AND_RETURN_VALUE)
-@SuppressWarnings({"unused"})
 public abstract class PBytecodeDSLRootNode extends PRootNode implements BytecodeRootNode {
     public static final int EXPLODE_LOOP_THRESHOLD = 30;
     private static final BytecodeConfig TRACE_AND_PROFILE_CONFIG = PBytecodeDSLRootNodeGen.newConfigBuilder().//
@@ -364,6 +384,10 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
                     addInstrumentation(TraceOrProfileReturn.class).//
                     addInstrumentation(TraceException.class).//
                     addInstrumentation(TraceLineWithArgument.class).//
+                    addInstrumentation(EnterInstrumentedRoot.class).//
+                    addInstrumentation(ResumeYieldGenerator.class).//
+                    addInstrumentation(TraceYieldValue.class).//
+                    addInstrumentation(ResumeInstrumentedYield.class).//
                     build();
 
     @Child private transient CalleeContext calleeContext = CalleeContext.create();
@@ -377,14 +401,15 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
     }
 
     // Not a child of this root, adopted by the BytecodeNode
-    private transient TracingNodes tracingNodes;
+    @CompilationFinal private transient TracingNodes tracingNodes;
 
     // These fields are effectively final, but can only be set after construction.
     @CompilationFinal protected transient BytecodeDSLCodeUnit co;
     @CompilationFinal protected transient Signature signature;
     @CompilationFinal protected transient int selfIndex;
     @CompilationFinal protected transient int classcellIndex;
-    @CompilationFinal public int yieldFromGeneratorIndex = -1;
+    @CompilationFinal protected transient int instrumentationDataIndex;
+    @CompilationFinal protected transient int yieldFromGeneratorIndex = -1;
     @CompilationFinal(dimensions = 1) protected transient Assumption[] cellEffectivelyFinalAssumptions;
 
     private transient boolean pythonInternal;
@@ -399,8 +424,17 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
         ((BytecodeDSLFrameInfo) getFrameDescriptor().getInfo()).setRootNode(this);
     }
 
+    public static Source loadSourceContent(PythonLanguage language, Source sourceWithoutContent) {
+        return language.getOrCreateSourceWithContent(sourceWithoutContent);
+    }
+
     public static PBytecodeDSLRootNode cast(RootNode root) {
         return PBytecodeDSLRootNodeGen.BYTECODE.cast(root);
+    }
+
+    @TruffleBoundary
+    public static void updateAllToTracingConfig(PythonLanguage language) {
+        PBytecodeDSLRootNodeGen.BYTECODE.update(language, TRACE_AND_PROFILE_CONFIG);
     }
 
     public final PythonLanguage getLanguage() {
@@ -421,6 +455,9 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
                 cellEffectivelyFinalAssumptions[i] = Truffle.getRuntime().createAssumption("cell is effectively final");
             }
         }
+        instrumentationDataIndex = co.instrumentationDataIndex;
+        yieldFromGeneratorIndex = co.yieldFromGeneratorIndex;
+        PythonOptions.setUncachedInterpreterThreshold(getLanguage(), getBytecodeNode());
     }
 
     @Override
@@ -453,12 +490,44 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
         @Specialization
         public static void doEnter(VirtualFrame frame,
                         @Bind PBytecodeDSLRootNode root) {
+            assert PArguments.getFunctionOrCodeObject(frame) != null;
             root.calleeContext.enter(frame, root);
+        }
+    }
 
-            if (root.needsTraceAndProfileInstrumentation()) {
-                root.ensureTraceAndProfileEnabled();
-                root.getThreadState().pushInstrumentationData(root);
-            }
+    private InstrumentationData getInstrumentationData(VirtualFrame frame, BytecodeNode bytecode) {
+        InstrumentationData current = (InstrumentationData) bytecode.getLocalValue(0, frame, instrumentationDataIndex);
+        if (current == null) {
+            // This should only happen when this root was on stack when the config was updated. It
+            // should have been deoptimized anyway when the stack was unwound back to it.
+            CompilerDirectives.transferToInterpreterAndInvalidate();
+            current = new InstrumentationData();
+            bytecode.setLocalValue(0, frame, instrumentationDataIndex, current);
+        }
+        return current;
+    }
+
+    private void resetInstrumentationData(VirtualFrame frame, BytecodeNode bytecode) {
+        InstrumentationData current = (InstrumentationData) bytecode.getLocalValue(0, frame, instrumentationDataIndex);
+        if (current == null) {
+            current = new InstrumentationData();
+            bytecode.setLocalValue(0, frame, instrumentationDataIndex, current);
+        }
+        current.reset();
+    }
+
+    private void resetInstrumentationDataForResume(VirtualFrame frame, BytecodeNode bytecode, int bci) {
+        resetInstrumentationData(frame, bytecode);
+        getInstrumentationData(frame, bytecode).setNonClearingPastLine(bciToLine(bci, bytecode));
+    }
+
+    @Instrumentation(storeBytecodeIndex = false)
+    public static final class EnterInstrumentedRoot {
+        @Specialization
+        public static void doEnter(VirtualFrame frame,
+                        @Bind PBytecodeDSLRootNode root,
+                        @Bind BytecodeNode bytecode) {
+            bytecode.setLocalValue(0, frame, root.instrumentationDataIndex, new InstrumentationData());
         }
     }
 
@@ -469,9 +538,8 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
                         @Bind PBytecodeDSLRootNode root,
                         @Bind BytecodeNode location) {
             if (root.needsTraceAndProfileInstrumentation()) {
-                root.getThreadState().popInstrumentationData(root);
+                root.traceOrProfileReturn(frame, location, returnValue);
             }
-
             root.calleeContext.exit(frame, root, location);
             return returnValue;
         }
@@ -486,15 +554,10 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
             if (ate instanceof PException pe) {
                 pe.notifyAddedTracebackFrame(!root.isInternal());
             }
-
+            // We cannot use instrumentation for exceptional exit
             if (root.needsTraceAndProfileInstrumentation()) {
-                try {
-                    root.traceOrProfileReturn(frame, location, null);
-                } finally {
-                    root.getThreadState().popInstrumentationData(root);
-                }
+                root.traceOrProfileReturn(frame, location, null);
             }
-
             root.calleeContext.exit(frame, root, location);
         }
     }
@@ -503,22 +566,13 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
      * Data for tracing, profiling and instrumentation
      */
     public static final class InstrumentationData {
-        private final InstrumentationData previous;
-        private final PBytecodeDSLRootNode rootNode;
         private int pastLine;
+        // Sometimes, we need to use pastLine value after it has been cleared. Implicit returns in
+        // combination with loops are one such scenario.
+        private int nonClearingPastLine;
 
-        public InstrumentationData(PBytecodeDSLRootNode rootNode, InstrumentationData previous) {
-            this.previous = previous;
-            this.rootNode = rootNode;
-            this.pastLine = -1;
-        }
-
-        public InstrumentationData getPrevious() {
-            return previous;
-        }
-
-        public PBytecodeDSLRootNode getRootNode() {
-            return rootNode;
+        public InstrumentationData() {
+            reset();
         }
 
         int getPastLine() {
@@ -532,6 +586,19 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
         void clearPastLine() {
             this.pastLine = -1;
         }
+
+        int getNonClearingPastLine() {
+            return nonClearingPastLine;
+        }
+
+        void setNonClearingPastLine(int value) {
+            nonClearingPastLine = value;
+        }
+
+        public void reset() {
+            this.pastLine = -1;
+            this.nonClearingPastLine = -1;
+        }
     }
 
     @NonIdempotent
@@ -543,13 +610,6 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
     @NonIdempotent
     public final PythonThreadState getThreadState() {
         return PythonContext.get(this).getThreadState(getLanguage());
-    }
-
-    /**
-     * Reparses with instrumentations for settrace and setprofile enabled.
-     */
-    public final void ensureTraceAndProfileEnabled() {
-        getRootNodes().update(TRACE_AND_PROFILE_CONFIG);
     }
 
     private TracingNodes getTracingNodes(BytecodeNode location) {
@@ -589,7 +649,7 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
             Object realResult = result == PNone.NONE ? null : result;
             pyFrame.setLocalTraceFun(realResult);
         } catch (Throwable e) {
-            threadState.setProfileFun(null, getLanguage());
+            threadState.setProfileFun(null, null, getLanguage());
             throw e;
         } finally {
             threadState.profilingStop();
@@ -640,7 +700,7 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
                 pyFrame.setLocalTraceFun(null);
             }
         } catch (Throwable e) {
-            threadState.setTraceFun(null, getLanguage());
+            threadState.setTraceFun(null, null, getLanguage());
             throw e;
         } finally {
             if (line != -1) {
@@ -650,6 +710,7 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
         }
     }
 
+    @InliningCutoff
     private void traceOrProfileCall(VirtualFrame frame, BytecodeNode bytecode, int bci) {
         PythonThreadState threadState = getThreadState();
         Object traceFun = threadState.getTraceFun();
@@ -666,7 +727,7 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
     @InliningCutoff
     private void traceLine(VirtualFrame frame, BytecodeNode location, int line) {
         PythonThreadState threadState = getThreadState();
-        InstrumentationData instrumentationData = threadState.getInstrumentationData(this);
+        InstrumentationData instrumentationData = getInstrumentationData(frame, location);
 
         // TODO: this should never happen by nature of how we emit TraceLine, but sometimes does.
         // needs investigation.
@@ -674,6 +735,7 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
             return;
         }
         instrumentationData.setPastLine(line);
+        instrumentationData.setNonClearingPastLine(line);
 
         PFrame pyFrame = ensurePyFrame(frame, location);
         if (pyFrame.getTraceLine()) {
@@ -687,10 +749,11 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
     @InliningCutoff
     private void traceLineAtLoopHeader(VirtualFrame frame, BytecodeNode location, int line) {
         PythonThreadState threadState = getThreadState();
-        InstrumentationData instrumentationData = threadState.getInstrumentationData(this);
+        InstrumentationData instrumentationData = getInstrumentationData(frame, location);
         int pastLine = instrumentationData.getPastLine();
 
         instrumentationData.setPastLine(line);
+        instrumentationData.setNonClearingPastLine(line);
 
         PFrame pyFrame = ensurePyFrame(frame, location);
         if (pyFrame.getTraceLine()) {
@@ -715,11 +778,13 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
         }
     }
 
+    @InliningCutoff
     private void traceOrProfileReturn(VirtualFrame frame, BytecodeNode location, Object value) {
         PythonThreadState threadState = getThreadState();
         Object traceFun = threadState.getTraceFun();
         if (traceFun != null) {
-            int pastLine = threadState.getInstrumentationData(this).getPastLine();
+            InstrumentationData instrumentationData = getInstrumentationData(frame, location);
+            int pastLine = instrumentationData.getNonClearingPastLine();
             invokeTraceFunction(frame, location, traceFun, threadState, TraceEvent.RETURN, value, pastLine);
         }
         Object profileFun = threadState.getProfileFun();
@@ -855,7 +920,7 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
                 getCaughtExceptionNode = insert(ExceptionStateNodes.GetCaughtExceptionNode.create());
             }
             AbstractTruffleException context = getCaughtExceptionNode.execute(frame);
-            if (context instanceof PException pe2) {
+            if (context instanceof PException pe2 && !pe.isReraised()) {
                 if (chainExceptionsNode == null) {
                     CompilerDirectives.transferToInterpreterAndInvalidate();
                     chainExceptionsNode = insert(ChainExceptionsNode.create());
@@ -902,14 +967,6 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
 
     public int getFirstLineno() {
         return co.startLine;
-    }
-
-    protected Source getSource() {
-        SourceSection section = getSourceSection();
-        if (section == null) {
-            return PythonUtils.createFakeSource();
-        }
-        return section.getSource();
     }
 
     @Override
@@ -990,8 +1047,8 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
     }
 
     @Override
-    protected byte[] extractCode() {
-        return MarshalModuleBuiltins.serializeCodeUnit(null, PythonContext.get(this), co);
+    protected byte[] extractCode(Node node) {
+        return MarshalModuleBuiltins.serializeCodeUnit(node, getLanguage(), co);
     }
 
     private static Object checkUnboundCell(PCell cell, int index, BytecodeNode bytecodeNode) {
@@ -1010,26 +1067,52 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
         return result;
     }
 
-    public PCell readClassCell(Frame frame) {
+    public PCell readClassCell(BytecodeFrame frame) {
         if (classcellIndex < 0) {
             return null;
         }
-        return (PCell) getBytecodeNode().getLocalValue(0, frame, classcellIndex);
+        return (PCell) frame.getLocalValue(classcellIndex);
+    }
+
+    public PCell readClassCell(VirtualFrame frame, BytecodeNode bytecodeNode) {
+        if (classcellIndex < 0) {
+            return null;
+        }
+        return (PCell) bytecodeNode.getLocalValue(0, frame, classcellIndex);
     }
 
     public boolean hasSelf() {
         return selfIndex >= 0;
     }
 
-    public Object readSelf(Frame frame) {
+    public Object readSelf(Frame frame, BytecodeNode bytecodeNode) {
         if (selfIndex < 0) {
             return null;
         } else if (selfIndex == 0) {
-            return getBytecodeNode().getLocalValue(0, frame, 0);
+            return bytecodeNode.getLocalValue(0, frame, 0);
         } else {
-            PCell selfCell = (PCell) getBytecodeNode().getLocalValue(0, frame, selfIndex);
+            PCell selfCell = (PCell) bytecodeNode.getLocalValue(0, frame, selfIndex);
             return selfCell.getRef();
         }
+    }
+
+    public Object readSelf(BytecodeFrame frame) {
+        if (selfIndex < 0) {
+            return null;
+        } else if (selfIndex == 0) {
+            return frame.getLocalValue(0);
+        } else {
+            PCell selfCell = (PCell) frame.getLocalValue(selfIndex);
+            return selfCell.getRef();
+        }
+    }
+
+    public Object readYieldFromGenerator(BytecodeNode bytecodeNode, MaterializedFrame frame) {
+        return bytecodeNode.getLocalValue(0, frame, yieldFromGeneratorIndex);
+    }
+
+    public boolean hasYieldFromGenerator() {
+        return yieldFromGeneratorIndex != -1;
     }
 
     @Operation
@@ -1070,7 +1153,6 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
      * provides access to the generator frame even before the generator was started.
      */
     @Yield
-    @SuppressWarnings("truffle-interpreted-performance") // blocked by GR-69979
     public static final class YieldGenerator {
         @Specialization
         public static Object doYield(
@@ -1079,13 +1161,7 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
                         @Bind ContinuationRootNode continuationRootNode,
                         @Bind PBytecodeDSLRootNode innerRoot,
                         @Bind BytecodeNode bytecodeNode) {
-            try {
-                return createGenerator(continuationFrame, inliningTarget, continuationRootNode, innerRoot);
-            } finally {
-                if (innerRoot.needsTraceAndProfileInstrumentation()) {
-                    innerRoot.getThreadState().popInstrumentationData(innerRoot);
-                }
-            }
+            return createGenerator(continuationFrame, inliningTarget, continuationRootNode, innerRoot);
         }
 
         private static PythonAbstractObject createGenerator(MaterializedFrame continuationFrame, Node inliningTarget,
@@ -1110,21 +1186,28 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
      * Resumes execution after the artificial yield of the generator object
      * ({@link YieldGenerator}).
      */
-    @Operation(storeBytecodeIndex = true)
+    @Instrumentation(storeBytecodeIndex = true)
     public static final class ResumeYieldGenerator {
         @Specialization
-        public static void doObject(VirtualFrame frame, Object generator,
-                        @Bind Node location,
+        public static Object doObject(VirtualFrame frame, Object generator,
                         @Bind PBytecodeDSLRootNode root,
                         @Bind BytecodeNode bytecode,
-                        @Bind("$bytecodeIndex") int bci,
-                        @Cached GetSendValueNode getSendValue) {
-            if (root.needsTraceAndProfileInstrumentation()) {
-                // We may not have reparsed the root with instrumentation yet.
-                root.ensureTraceAndProfileEnabled();
-                root.getThreadState().pushInstrumentationData(root);
-                root.traceOrProfileCall(frame, bytecode, bci);
-            }
+                        @Bind("$bytecodeIndex") int bci) {
+            root.resetInstrumentationDataForResume(frame, bytecode, bci);
+            root.traceOrProfileCall(frame, bytecode, bci);
+            return generator;
+        }
+    }
+
+    @Instrumentation(storeBytecodeIndex = true)
+    public static final class TraceYieldValue {
+        @Specialization
+        public static Object doObject(Object value,
+                        @Bind MaterializedFrame frame,
+                        @Bind PBytecodeDSLRootNode root,
+                        @Bind BytecodeNode bytecode) {
+            root.traceOrProfileReturn(frame, bytecode, value);
+            return value;
         }
     }
 
@@ -1132,7 +1215,6 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
      * Performs some clean-up steps before suspending execution, and updates the generator state.
      */
     @Yield
-    @SuppressWarnings("truffle-interpreted-performance") // blocked by GR-69979
     public static final class YieldValue {
         @Specialization
         public static Object doObject(Object value,
@@ -1140,14 +1222,6 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
                         @Bind MaterializedFrame frame,
                         @Bind PBytecodeDSLRootNode root,
                         @Bind BytecodeNode bytecode) {
-            if (root.needsTraceAndProfileInstrumentation()) {
-                try {
-                    root.traceOrProfileReturn(frame, bytecode, value);
-                } finally {
-                    root.getThreadState().popInstrumentationData(root);
-                }
-            }
-
             // Suspended generators have no backref
             PArguments.getCurrentFrameInfo(frame.getArguments()).setCallerInfo(PFrame.Reference.EMPTY);
             // we may need to synchronize the generator's frame locals to the PFrame if it escaped
@@ -1189,13 +1263,42 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
         }
     }
 
-    @Operation(storeBytecodeIndex = true)
+    @Operation(storeBytecodeIndex = false)
     @ConstantOperand(type = TruffleString.class)
+    @ImportStatic(PGuards.class)
     public static final class ReadName {
-        @Specialization
-        public static Object perform(VirtualFrame frame, TruffleString name,
-                        @Cached ReadNameNode readNode) {
-            return readNode.execute(frame, name);
+        static Object readFromLocalsFastPath(VirtualFrame frame, TruffleString attributeId, ReadAttributeFromPythonObjectNode readNode) {
+            Object specialArgument = PArguments.getSpecialArgument(frame);
+            if (specialArgument instanceof PDict dict && dict.getDictStorage() instanceof DynamicObjectStorage s) {
+                return readNode.execute(s.getStore(), attributeId, PNone.NO_VALUE);
+            }
+            return PNone.NO_VALUE;
+        }
+
+        @ForceQuickening
+        @Specialization(guards = "!isNoValue(result)", limit = "1")
+        public static Object doLocalFastPath(VirtualFrame frame, TruffleString name,
+                        @Cached(inline = false) ReadAttributeFromPythonObjectNode readAttrNode,
+                        @Bind("readFromLocalsFastPath(frame, name, readAttrNode)") Object result) {
+            return result;
+        }
+
+        @StoreBytecodeIndex
+        @Specialization(replaces = "doLocalFastPath")
+        public static Object doFull(VirtualFrame frame, TruffleString name,
+                        @Bind Node inliningTarget,
+                        @Cached PyObjectGetItemOrNull getLocal,
+                        @Cached ReadGlobalOrBuiltinNode readGlobalOrBuiltinNode,
+                        @Cached InlinedConditionProfile hasLocalsProfile) {
+            Object locals = PArguments.getSpecialArgument(frame);
+            Object result = null;
+            if (hasLocalsProfile.profile(inliningTarget, locals != null)) {
+                result = getLocal.execute(frame, inliningTarget, locals, name);
+            }
+            if (result == null) {
+                return readGlobalOrBuiltinNode.execute(frame, name);
+            }
+            return result;
         }
     }
 
@@ -1205,8 +1308,13 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
         @Specialization(guards = "hasLocals(frame)")
         public static void performLocals(VirtualFrame frame, TruffleString name,
                         @Bind Node inliningTarget,
-                        @Cached PyObjectDelItem deleteNode) {
-            deleteNode.execute(frame, inliningTarget, PArguments.getSpecialArgument(frame), name);
+                        @Cached PyObjectDelItem deleteNode,
+                        @Cached PRaiseNode raiseNode) {
+            try {
+                deleteNode.execute(frame, inliningTarget, PArguments.getSpecialArgument(frame), name);
+            } catch (PException e) {
+                throw raiseNode.raiseNameError(inliningTarget, name);
+            }
         }
 
         @Specialization(guards = "!hasLocals(frame)")
@@ -1310,30 +1418,30 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
     @Operation(storeBytecodeIndex = true)
     public static final class FormatStr {
         @Specialization
-        public static TruffleString perform(VirtualFrame frame, Object object,
+        public static Object perform(VirtualFrame frame, Object object,
                         @Bind Node inliningTarget,
-                        @Cached PyObjectStrAsTruffleStringNode asTruffleStringNode) {
-            return asTruffleStringNode.execute(frame, inliningTarget, object);
+                        @Cached PyObjectStrAsObjectNode strNode) {
+            return strNode.execute(frame, inliningTarget, object);
         }
     }
 
     @Operation(storeBytecodeIndex = true)
     public static final class FormatRepr {
         @Specialization
-        public static TruffleString perform(VirtualFrame frame, Object object,
+        public static Object perform(VirtualFrame frame, Object object,
                         @Bind Node inliningTarget,
-                        @Cached PyObjectReprAsTruffleStringNode asTruffleStringNode) {
-            return asTruffleStringNode.execute(frame, inliningTarget, object);
+                        @Cached PyObjectReprAsObjectNode reprNode) {
+            return reprNode.execute(frame, inliningTarget, object);
         }
     }
 
     @Operation(storeBytecodeIndex = true)
     public static final class FormatAscii {
         @Specialization
-        public static TruffleString perform(VirtualFrame frame, Object object,
+        public static Object perform(VirtualFrame frame, Object object,
                         @Bind Node inliningTarget,
-                        @Cached PyObjectAsciiNode asTruffleStringNode) {
-            return asTruffleStringNode.execute(frame, inliningTarget, object);
+                        @Cached PyObjectAsciiAsObjectNode asciiNode) {
+            return asciiNode.execute(frame, inliningTarget, object);
         }
     }
 
@@ -1358,7 +1466,7 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
         }
     }
 
-    @Operation(storeBytecodeIndex = true)
+    @Operation(storeBytecodeIndex = true, forceCached = true)
     @ConstantOperand(type = LocalAccessor.class)
     public static final class MatchClass {
         @Specialization
@@ -1370,41 +1478,45 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
         }
     }
 
-    @Operation(storeBytecodeIndex = true)
+    @Operation(storeBytecodeIndex = true, forceCached = true)
     @ConstantOperand(type = TruffleString.class, name = "name")
     @ConstantOperand(type = TruffleString.class, name = "qualifiedName")
-    @ConstantOperand(type = BytecodeDSLCodeUnitAndRoot.class)
+    @ConstantOperand(type = int.class)
     public static final class MakeFunction {
         @Specialization(guards = "isSingleContext(rootNode)")
         public static Object functionSingleContext(VirtualFrame frame,
                         TruffleString name,
                         TruffleString qualifiedName,
-                        BytecodeDSLCodeUnitAndRoot codeUnit,
+                        @SuppressWarnings("unused") int codeIndex,
                         Object[] defaults,
                         Object[] kwDefaultsObject,
                         Object closure,
                         Object annotations,
                         @Bind PBytecodeDSLRootNode rootNode,
-                        @Cached("createCode(rootNode, codeUnit)") PCode cachedCode,
+                        @Bind("getCodeUnit(rootNode, codeIndex)") BytecodeDSLCodeUnit codeUnit,
+                        @Cached("getCode(frame, codeIndex, codeUnit)") PCode cachedCode,
+                        @Shared @Cached("createCodeStableAssumption()") Assumption codeStableAssumption,
                         @Shared @Cached DynamicObject.PutNode putNode) {
-            return createFunction(frame, name, qualifiedName, codeUnit.getCodeUnit().getDocstring(),
-                            cachedCode, defaults, kwDefaultsObject, closure, annotations, rootNode, putNode);
+            return createFunction(frame, name, qualifiedName, codeUnit.getDocstring(),
+                            cachedCode, defaults, kwDefaultsObject, closure, annotations, codeStableAssumption, rootNode, putNode);
         }
 
         @Specialization(replaces = "functionSingleContext")
         public static Object functionMultiContext(VirtualFrame frame,
                         TruffleString name,
                         TruffleString qualifiedName,
-                        BytecodeDSLCodeUnitAndRoot codeUnit,
+                        int codeIndex,
                         Object[] defaults,
                         Object[] kwDefaultsObject,
                         Object closure,
                         Object annotations,
                         @Bind PBytecodeDSLRootNode rootNode,
+                        @Shared @Cached("createCodeStableAssumption()") Assumption codeStableAssumption,
                         @Shared @Cached DynamicObject.PutNode putNode) {
-            PCode code = createCode(rootNode, codeUnit);
-            return createFunction(frame, name, qualifiedName, codeUnit.getCodeUnit().getDocstring(),
-                            code, defaults, kwDefaultsObject, closure, annotations, rootNode, putNode);
+            BytecodeDSLCodeUnit codeUnit = getCodeUnit(rootNode, codeIndex);
+            PCode code = getCode(frame, codeIndex, codeUnit);
+            return createFunction(frame, name, qualifiedName, codeUnit.getDocstring(),
+                            code, defaults, kwDefaultsObject, closure, annotations, codeStableAssumption, rootNode, putNode);
         }
 
         @Idempotent
@@ -1413,26 +1525,32 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
         }
 
         @NeverDefault
-        protected static PCode createCode(PBytecodeDSLRootNode outerRootNode, BytecodeDSLCodeUnitAndRoot codeUnit) {
-            PBytecodeDSLRootNode rootNode = codeUnit.getRootNode(outerRootNode);
-            return PFactory.createCode(
-                            PythonLanguage.get(outerRootNode),
-                            rootNode.getCallTarget(),
-                            rootNode.getSignature(),
-                            codeUnit.getCodeUnit());
+        static Assumption createCodeStableAssumption() {
+            return Truffle.getRuntime().createAssumption("code stable assumption");
+        }
+
+        @NeverDefault
+        protected static PCode getCode(VirtualFrame frame, int codeIndex, BytecodeDSLCodeUnit codeUnit) {
+            PCode thisCode = PArguments.getCodeObject(frame);
+            return thisCode.getOrCreateChildCode(codeIndex, codeUnit);
+        }
+
+        protected static BytecodeDSLCodeUnit getCodeUnit(PBytecodeDSLRootNode rootNode, int codeIndex) {
+            return (BytecodeDSLCodeUnit) rootNode.getCodeUnit().constants[codeIndex];
         }
 
         protected static PFunction createFunction(VirtualFrame frame,
                         TruffleString name, TruffleString qualifiedName, TruffleString doc,
                         PCode code, Object[] defaults,
                         Object[] kwDefaultsObject, Object closure, Object annotations,
-                        PBytecodeDSLRootNode node,
+                        Assumption codeStableAssumption, PBytecodeDSLRootNode node,
                         DynamicObject.PutNode putNode) {
             PKeyword[] kwDefaults = new PKeyword[kwDefaultsObject.length];
             // Note: kwDefaultsObject should be a result of operation MakeKeywords, which produces
             // PKeyword[]
-            System.arraycopy(kwDefaultsObject, 0, kwDefaults, 0, kwDefaults.length);
-            PFunction function = PFactory.createFunction(PythonLanguage.get(node), name, qualifiedName, code, PArguments.getGlobals(frame), defaults, kwDefaults, (PCell[]) closure);
+            PythonUtils.arraycopy(kwDefaultsObject, 0, kwDefaults, 0, kwDefaults.length);
+            PFunction function = PFactory.createFunction(PythonLanguage.get(node), name, qualifiedName, code, PArguments.getGlobals(frame), defaults, kwDefaults, (PCell[]) closure,
+                            codeStableAssumption);
 
             if (annotations != null) {
                 putNode.execute(function, T___ANNOTATIONS__, annotations);
@@ -1557,13 +1675,153 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
 
     @Operation(storeBytecodeIndex = true)
     @ConstantOperand(type = TruffleString.class)
+    @ImportStatic({PGuards.class, TpSlots.class})
     public static final class GetAttribute {
-        @Specialization
+        static PropertyGetter getPropertyGetterWithFinalAssumption(Shape shape, Object key) {
+            PropertyGetter getter = shape.makePropertyGetter(key);
+            if (getter != null) {
+                Property property = shape.getProperty(key);
+                if (property != null) {
+                    property.getLocation().getFinalAssumption();
+                }
+            }
+            return getter;
+        }
+
+        // Builtin module object fast-path: we know there aren't any descriptors for other than
+        // dunder (__xxx__) names
+        public static Object loadModuleValue(PythonModule object, Shape cachedShape, PropertyGetter cachedPropertyGetter) {
+            // GetClass.GetPythonObjectClassNode would cache on the shape if it can, and read the
+            // dynamic type from there unless it observes objects where the type was changed. This
+            // is rare enough that we can pay the price of a useless read here.
+            Object type = cachedShape.getDynamicType();
+            if (type != PythonBuiltinClassType.PythonModule) {
+                return null;
+            }
+
+            assert object.checkDictFlags();
+            if ((cachedShape.getFlags() & (PythonObject.HAS_MATERIALIZED_DICT)) == 0) {
+                Object value = cachedPropertyGetter.get(object);
+                return value == PNone.NO_VALUE ? null : value;
+            }
+
+            return null;
+        }
+
+        @ForceQuickening
+        @Specialization(guards = {"cachedPropertyGetter != null", "cachedPropertyGetter.accepts(receiver)", "value != null",
+                        "!canBeSpecialMethod(key, codePointLengthNode, codePointAtIndexNode)"}, limit = "3")
+        static Object doModule(TruffleString key, PythonModule receiver,
+                        @Cached("receiver.getShape()") Shape cachedShape,
+                        @Cached("getPropertyGetterWithFinalAssumption(cachedShape, key)") PropertyGetter cachedPropertyGetter,
+                        @Exclusive @Cached TruffleString.CodePointLengthNode codePointLengthNode,
+                        @Exclusive @Cached TruffleString.CodePointAtIndexUTF32Node codePointAtIndexNode,
+                        @Bind("loadModuleValue(receiver, cachedShape, cachedPropertyGetter)") Object value) {
+            return value;
+        }
+
+        // For type instance field: for builtin type we know descriptors only have dunder names
+        // (__xxx__), so we can skip descriptor check + we need to check the __get__ (tp_descr_get)
+        // on the resulting value (this is common situation)
+        public static Object loadTypeInstanceValue(VirtualFrame frame, Node inliningTarget, PythonManagedClass object, GetObjectSlotsNode getValueSlotsNode,
+                        CallSlotDescrGet callSlotDescrGet, Shape cachedShape, PropertyGetter cachedPropertyGetter, InlinedBranchProfile hasNonDescriptorValueProfile) {
+            Object type = cachedShape.getDynamicType();
+            if (type != PythonBuiltinClassType.PythonClass) {
+                return null;
+            }
+            assert object.checkDictFlags();
+            if ((cachedShape.getFlags() & (PythonObject.HAS_MATERIALIZED_DICT)) == 0) {
+                Object value = cachedPropertyGetter.get(object);
+                if (value != PNone.NO_VALUE && value != null) {
+                    var valueGet = getValueSlotsNode.execute(inliningTarget, value).tp_descr_get();
+                    if (valueGet == null) {
+                        hasNonDescriptorValueProfile.enter(inliningTarget);
+                        return value;
+                    } else {
+                        return callSlotDescrGet.execute(frame, inliningTarget, valueGet, value, PNone.NO_VALUE, object);
+                    }
+                }
+            }
+            return null;
+        }
+
+        @ForceQuickening
+        @Specialization(guards = {"cachedPropertyGetter != null", "cachedPropertyGetter.accepts(receiver)", "value != null",
+                        "!canBeSpecialMethod(key, codePointLengthNode, codePointAtIndexNode)"}, limit = "3")
+        static Object doType(VirtualFrame frame, TruffleString key, PythonManagedClass receiver,
+                        @Cached("receiver.getShape()") Shape cachedShape,
+                        @Cached("getPropertyGetterWithFinalAssumption(cachedShape, key)") PropertyGetter cachedPropertyGetter,
+                        @Cached GetObjectSlotsNode getObjectSlotsNode,
+                        @Cached CallSlotDescrGet callSlotDescrGet,
+                        @Cached InlinedBranchProfile hasNonDescriptorValueProfile,
+                        @Exclusive @Cached TruffleString.CodePointLengthNode codePointLengthNode,
+                        @Exclusive @Cached TruffleString.CodePointAtIndexUTF32Node codePointAtIndexNode,
+                        @Bind("loadTypeInstanceValue(frame, $node, receiver, getObjectSlotsNode, callSlotDescrGet, cachedShape, cachedPropertyGetter, hasNonDescriptorValueProfile)") Object value) {
+            return value;
+        }
+
+        // Object instance field fast-path: for cases where there is no descriptor and it's just
+        // simple DOM property read
+        public static Object loadInstanceValue(Node inliningTarget, PythonObject object, LookupAttributeInMRONode getDesc, Shape cachedShape, PropertyGetter cachedPropertyGetter,
+                        InlineWeakValueProfile slotsValueProfile) {
+            TpSlots slots;
+            Object type = cachedShape.getDynamicType();
+            // If this path works out, PropertyGetter.accepts() guards on the shape.
+            // After PE the final dynamicType field should dominate the branch and PE should remove
+            // the slots branch it doesn't need. The
+            // PythonBuiltinClassType slots are final, so PE can use that, but PythonManagedClass
+            // slots are not, so we should probably profile?
+            if (type instanceof PythonBuiltinClassType pbct) {
+                slots = pbct.getSlots();
+            } else if (type instanceof PythonManagedClass klass) {
+                slots = slotsValueProfile.execute(inliningTarget, klass.getTpSlots());
+            } else {
+                return null;
+            }
+            // The next check will fold after PE if the pbct was constant, which is implied by the
+            // guard in getDesc
+            if (slots.tp_getattro() == ObjectBuiltins.SLOTS.tp_getattro() ||
+                            slots.tp_getattro() == ModuleBuiltins.SLOTS.tp_getattro()) {
+                Object descr = getDesc.execute(type);
+                if (descr == PNone.NO_VALUE) {
+                    assert object.checkDictFlags();
+                    if ((cachedShape.getFlags() & (PythonObject.HAS_MATERIALIZED_DICT)) == 0) {
+                        Object value = cachedPropertyGetter.get(object);
+                        // Note: the NO_VALUE check is harmless for PE, because it leads to a deopt
+                        // anyway
+                        return value == PNone.NO_VALUE ? null : value;
+                    }
+                }
+            }
+            return null;
+        }
+
+        @ForceQuickening
+        @Specialization(guards = {"cachedPropertyGetter != null", "cachedPropertyGetter.accepts(receiver)", "value != null"}, replaces = "doModule", limit = "3")
+        static Object doInstanceValue(TruffleString key, PythonObject receiver,
+                        @Bind Node inliningTarget,
+                        @Cached("receiver.getShape()") Shape cachedShape,
+                        @Cached("getPropertyGetterWithFinalAssumption(cachedShape, key)") PropertyGetter cachedPropertyGetter,
+                        @Cached("create(key)") LookupAttributeInMRONode getDesc,
+                        @Cached InlineWeakValueProfile slotsValueProfile,
+                        @Bind("loadInstanceValue(inliningTarget, receiver, getDesc, cachedShape, cachedPropertyGetter, slotsValueProfile)") Object value) {
+            return value;
+        }
+
+        @Specialization(excludeForUncached = true, replaces = {"doInstanceValue", "doType"})
         public static Object doIt(VirtualFrame frame,
-                        TruffleString name,
+                        TruffleString key,
                         Object obj,
-                        @Cached("create(name)") GetFixedAttributeNode getAttributeNode) {
+                        @Cached("create(key)") GetFixedAttributeNode getAttributeNode) {
             return getAttributeNode.execute(frame, obj);
+        }
+
+        @Specialization(replaces = "doIt")
+        @InliningCutoff
+        public static Object doItUncached(VirtualFrame frame, TruffleString key, Object obj,
+                        @Bind Node inliningTargetForDummy,
+                        @Cached PyObjectGetAttr dummyToForceStoreBCI) {
+            return PyObjectGetAttr.getUncached().execute(frame, null, obj, key);
         }
     }
 
@@ -1608,16 +1866,6 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
 
     @Operation(storeBytecodeIndex = true)
     @ConstantOperand(type = TruffleString.class)
-    public static final class ReadGlobal {
-        @Specialization
-        public static Object perform(VirtualFrame frame, TruffleString name,
-                        @Cached ReadGlobalOrBuiltinNode readNode) {
-            return readNode.execute(frame, name);
-        }
-    }
-
-    @Operation(storeBytecodeIndex = true)
-    @ConstantOperand(type = TruffleString.class)
     public static final class WriteGlobal {
         @Specialization
         public static void perform(VirtualFrame frame, TruffleString name, Object value,
@@ -1654,19 +1902,11 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
 
     @Operation(storeBytecodeIndex = false)
     public static final class MakeList {
-        @Specialization(guards = "elements.length == 0")
-        public static PList doEmpty(@Variadic Object[] elements,
-                        @Bind PBytecodeDSLRootNode rootNode) {
-            // Common pattern is to create an empty list and then add items.
-            // We need to start from empty storage, so that we can specialize to, say, int storage
-            // if only ints are appended to this list
-            return PFactory.createList(rootNode.getLanguage(), EmptySequenceStorage.INSTANCE);
-        }
-
-        @Specialization(guards = "elements.length > 0")
+        @Specialization
         public static PList perform(@Variadic Object[] elements,
-                        @Bind PBytecodeDSLRootNode rootNode) {
-            return PFactory.createList(rootNode.getLanguage(), elements);
+                        @Bind PBytecodeDSLRootNode rootNode,
+                        @Cached SequenceFromArrayNode.ListFromArrayNode listFromArrayNode) {
+            return listFromArrayNode.execute(rootNode.getLanguage(), elements);
         }
     }
 
@@ -1713,8 +1953,9 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
     public static final class MakeTuple {
         @Specialization
         public static Object perform(@Variadic Object[] elements,
-                        @Bind PBytecodeDSLRootNode rootNode) {
-            return PFactory.createTuple(rootNode.getLanguage(), elements);
+                        @Bind PBytecodeDSLRootNode rootNode,
+                        @Cached SequenceFromArrayNode.TupleFromArrayNode tupleFromArrayNode) {
+            return tupleFromArrayNode.execute(rootNode.getLanguage(), elements);
         }
     }
 
@@ -1919,15 +2160,15 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
             if (keysAndValues.length != entries * 2) {
                 throw CompilerDirectives.shouldNotReachHere();
             }
-            ObjectHashMap map = new ObjectHashMap(keysAndValues.length / 2);
-            PDict dict = PFactory.createDict(rootNode.getLanguage(), new EconomicMapStorage(map, false));
+            EconomicMapStorage map = EconomicMapStorage.create(entries);
+            PDict dict = PFactory.createDict(rootNode.getLanguage(), map);
             for (int i = 0; i < entries; i++) {
                 Object key = keysAndValues[i * 2];
                 Object value = keysAndValues[i * 2 + 1];
                 // Each entry represents either a k: v pair or a **splats. splats have no key.
                 if (key == PNone.NO_VALUE) {
                     updateNode.execute(frame, dict, value);
-                    assert dict.getDictStorage() instanceof EconomicMapStorage es && es.mapIsEqualTo(map);
+                    assert dict.getDictStorage() == map;
                 } else {
                     long hash = hashNode.execute(frame, inliningTarget, key);
                     putNode.put(frame, inliningTarget, map, key, hash, value);
@@ -1957,6 +2198,10 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
         }
     }
 
+    /**
+     * This operation is used to implement destructing assignment where the rhs should be fully
+     * evaluated and unpacked into temporary variables and then assigned to the targets.
+     */
     @Operation(storeBytecodeIndex = true)
     @ConstantOperand(type = LocalRangeAccessor.class)
     @ImportStatic({PGuards.class})
@@ -1975,7 +2220,7 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
             CompilerAsserts.partialEvaluationConstant(count);
 
             if (len != count) {
-                raiseError(inliningTarget, raiseNode, len, count);
+                throw raiseError(inliningTarget, raiseNode, len, count);
             }
 
             for (int i = 0; i < count; i++) {
@@ -1984,16 +2229,15 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
         }
 
         @InliningCutoff
-        private static void raiseError(Node inliningTarget, PRaiseNode raiseNode, int len, int count) {
+        private static PException raiseError(Node inliningTarget, PRaiseNode raiseNode, int len, int count) {
             if (len < count) {
-                throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.NOT_ENOUGH_VALUES_TO_UNPACK, count, len);
+                throw raiseNotEnoughValues(inliningTarget, raiseNode, count, len);
             } else {
-                throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.TOO_MANY_VALUES_TO_UNPACK, count);
+                throw raiseTooManyValues(inliningTarget, raiseNode, count);
             }
         }
 
         @Specialization
-        @ExplodeLoop
         @InliningCutoff
         public static void doUnpackIterable(VirtualFrame virtualFrame, LocalRangeAccessor results, Object collection,
                         @Bind Node inliningTarget,
@@ -2004,28 +2248,49 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
                         @Exclusive @Cached PRaiseNode raiseNode) {
             int count = results.getLength();
             CompilerAsserts.partialEvaluationConstant(count);
-
             Object iterator;
             try {
                 iterator = getIter.execute(virtualFrame, inliningTarget, collection);
             } catch (PException e) {
                 e.expectTypeError(inliningTarget, notIterableProfile);
-                throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.TypeError, ErrorMessages.CANNOT_UNPACK_NON_ITERABLE, collection);
+                throw raiseNotIterableError(collection, inliningTarget, raiseNode);
             }
+            extractItems(virtualFrame, inliningTarget, bytecode, getNextNode, raiseNode, iterator, results, count);
+            try {
+                getNextNode.execute(virtualFrame, inliningTarget, iterator);
+            } catch (IteratorExhausted e) {
+                return;
+            }
+            throw raiseTooManyValues(inliningTarget, raiseNode, count);
+        }
+
+        @ExplodeLoop
+        private static void extractItems(VirtualFrame virtualFrame, Node inliningTarget, BytecodeNode bytecode, PyIterNextNode getNextNode, PRaiseNode raiseNode, Object iterator,
+                        LocalRangeAccessor results, int count) {
+            CompilerAsserts.partialEvaluationConstant(count);
             for (int i = 0; i < count; i++) {
                 try {
                     Object value = getNextNode.execute(virtualFrame, inliningTarget, iterator);
                     results.setObject(bytecode, virtualFrame, i, value);
                 } catch (IteratorExhausted e) {
-                    throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.NOT_ENOUGH_VALUES_TO_UNPACK, count, i);
+                    raiseNotEnoughValues(inliningTarget, raiseNode, count, i);
                 }
             }
-            try {
-                Object value = getNextNode.execute(virtualFrame, inliningTarget, iterator);
-            } catch (IteratorExhausted e) {
-                return;
-            }
+        }
+
+        @InliningCutoff
+        private static PException raiseNotIterableError(Object collection, Node inliningTarget, PRaiseNode raiseNode) {
+            throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.TypeError, ErrorMessages.CANNOT_UNPACK_NON_ITERABLE, collection);
+        }
+
+        @InliningCutoff
+        private static PException raiseTooManyValues(Node inliningTarget, PRaiseNode raiseNode, int count) {
             throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.TOO_MANY_VALUES_TO_UNPACK, count);
+        }
+
+        @InliningCutoff
+        private static PException raiseNotEnoughValues(Node inliningTarget, PRaiseNode raiseNode, int expected, int actual) {
+            throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.NOT_ENOUGH_VALUES_TO_UNPACK, expected, actual);
         }
     }
 
@@ -2033,7 +2298,6 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
     @ConstantOperand(type = int.class)
     @ConstantOperand(type = LocalRangeAccessor.class)
     @ImportStatic({PGuards.class})
-    @SuppressWarnings("truffle-interpreted-performance")
     public static final class UnpackStarredToLocals {
         @Specialization(guards = "isBuiltinSequence(sequence)")
         public static void doUnpackSequence(VirtualFrame localFrame,
@@ -2041,12 +2305,12 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
                         LocalRangeAccessor results,
                         PSequence sequence,
                         @Cached SequenceNodes.GetSequenceStorageNode getSequenceStorageNode,
-                        @Shared @Cached SequenceStorageNodes.GetItemScalarNode getItemNode,
-                        @Shared @Cached SequenceStorageNodes.GetItemSliceNode getItemSliceNode,
+                        @Exclusive @Cached SequenceStorageNodes.GetItemScalarNode getItemNode,
+                        @Exclusive @Cached SequenceStorageNodes.GetItemSliceNode getItemSliceNode,
                         @Bind PBytecodeDSLRootNode rootNode,
                         @Bind BytecodeNode bytecode,
                         @Bind Node inliningTarget,
-                        @Shared @Cached PRaiseNode raiseNode) {
+                        @Exclusive @Cached PRaiseNode raiseNode) {
             int resultsLength = results.getLength();
             int countBefore = starIndex;
             int countAfter = resultsLength - starIndex - 1;
@@ -2075,12 +2339,12 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
                         @Cached PyIterNextNode getNextNode,
                         @Cached IsBuiltinObjectProfile notIterableProfile,
                         @Cached ListNodes.ConstructListNode constructListNode,
-                        @Shared @Cached SequenceStorageNodes.GetItemScalarNode getItemNode,
-                        @Shared @Cached SequenceStorageNodes.GetItemSliceNode getItemSliceNode,
+                        @Exclusive @Cached SequenceStorageNodes.GetItemScalarNode getItemNode,
+                        @Exclusive @Cached SequenceStorageNodes.GetItemSliceNode getItemSliceNode,
                         @Bind PBytecodeDSLRootNode rootNode,
                         @Bind BytecodeNode bytecode,
                         @Bind Node inliningTarget,
-                        @Shared @Cached PRaiseNode raiseNode) {
+                        @Exclusive @Cached PRaiseNode raiseNode) {
             int resultsLength = results.getLength();
             int countBefore = starIndex;
             int countAfter = resultsLength - starIndex - 1;
@@ -2619,7 +2883,7 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
                 value = getItemNode.execute(frame, inliningTarget, dict, name);
             } catch (PException e) {
                 e.expect(inliningTarget, KeyError, errorProfile);
-                value = readGlobal.read(frame, PArguments.getGlobals(frame), name);
+                value = readGlobal.execute(frame, name);
             }
             return value;
         }
@@ -2667,16 +2931,6 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
     }
 
     @Operation(storeBytecodeIndex = false)
-    @ConstantOperand(type = LocalAccessor.class)
-    public static final class ClearLocal {
-        @Specialization
-        public static void doClearLocal(VirtualFrame frame, LocalAccessor localAccessor,
-                        @Bind BytecodeNode bytecode) {
-            localAccessor.setObject(bytecode, frame, null);
-        }
-    }
-
-    @Operation(storeBytecodeIndex = false)
     @ConstantOperand(type = LocalRangeAccessor.class)
     public static final class InitFreeVars {
         @Specialization
@@ -2699,11 +2953,13 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
     }
 
     @Operation(storeBytecodeIndex = true)
+    @ConstantOperand(type = boolean.class)
     @ConstantOperand(type = LocalAccessor.class)
     public static final class KwargsMerge {
         @Specialization
         public static PDict doMerge(VirtualFrame frame,
-                        LocalAccessor callee,
+                        boolean clearCalleeLocal,
+                        LocalAccessor calleeTemporaryLocal,
                         PDict dict,
                         Object toMerge,
                         @Bind PBytecodeDSLRootNode rootNode,
@@ -2717,12 +2973,15 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
                 dict.setDictStorage(resultStorage);
             } catch (SameDictKeyException e) {
                 throw raise.raise(inliningTarget, PythonBuiltinClassType.TypeError, ErrorMessages.S_GOT_MULTIPLE_VALUES_FOR_KEYWORD_ARG,
-                                PyObjectFunctionStr.execute(frame, boundaryCallData, callee.getObject(bytecodeNode, frame)),
+                                PyObjectFunctionStr.execute(frame, boundaryCallData, calleeTemporaryLocal.getObject(bytecodeNode, frame)),
                                 e.getKey());
             } catch (NonMappingException e) {
                 throw raise.raise(inliningTarget, PythonBuiltinClassType.TypeError, ErrorMessages.ARG_AFTER_MUST_BE_MAPPING,
-                                PyObjectFunctionStr.execute(frame, boundaryCallData, callee.getObject(bytecodeNode, frame)),
+                                PyObjectFunctionStr.execute(frame, boundaryCallData, calleeTemporaryLocal.getObject(bytecodeNode, frame)),
                                 toMerge);
+            }
+            if (clearCalleeLocal) {
+                calleeTemporaryLocal.clear(bytecodeNode, frame);
             }
             return dict;
         }
@@ -3006,7 +3265,7 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
     @Operation(storeBytecodeIndex = true)
     @ImportStatic(CallDispatchers.class)
     public static final class CallComprehension {
-        @Specialization
+        @Specialization(excludeForUncached = true)
         public static Object doObject(VirtualFrame frame, PFunction callable, Object arg,
                         @Bind Node inliningTarget,
                         @Cached("createDirectCallNodeFor(callable)") DirectCallNode callNode,
@@ -3014,6 +3273,14 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
             Object[] args = PArguments.create(1);
             args[PArguments.USER_ARGUMENTS_OFFSET] = arg;
             return invoke.execute(frame, inliningTarget, callNode, callable, args);
+        }
+
+        @Specialization(replaces = "doObject")
+        @InliningCutoff
+        public static Object doObjectUncached(VirtualFrame frame, PFunction callable, Object arg) {
+            Object[] args = PArguments.create(1);
+            args[PArguments.USER_ARGUMENTS_OFFSET] = arg;
+            return FunctionIndirectInvokeNode.getUncached().execute(frame, null, callable, args);
         }
     }
 
@@ -3078,7 +3345,9 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
                 Object result = callExit.execute(frame, exit, contextManager, excType, pythonException, excTraceback);
                 if (!isTrue.execute(frame, result)) {
                     if (exception instanceof PException pException) {
-                        throw pException.getExceptionForReraise(!rootNode.isInternal());
+                        PException reraisedException = pException.getExceptionForReraise(!rootNode.isInternal());
+                        reraisedException.dontTraceOnReraise();
+                        throw reraisedException;
                     } else if (exception instanceof AbstractTruffleException ate) {
                         throw ate;
                     } else {
@@ -3191,12 +3460,22 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
         public static Object perform(
                         int length,
                         @Variadic Object[] strings,
+                        @Bind Node inliningTarget,
+                        @Cached CastToTruffleStringNode castToStringNode,
                         @Cached TruffleStringBuilder.AppendStringNode appendNode,
-                        @Cached TruffleStringBuilder.ToStringNode toString) {
+                        @Cached TruffleStringBuilder.ToStringNode toString,
+                        @Cached PRaiseNode raise) {
             var tsb = TruffleStringBuilderUTF32.create(PythonUtils.TS_ENCODING);
             CompilerAsserts.partialEvaluationConstant(length);
             for (int i = 0; i < length; i++) {
-                appendNode.execute(tsb, (TruffleString) strings[i]);
+                try {
+                    appendNode.execute(tsb, castToStringNode.execute(inliningTarget, strings[i]));
+                } catch (CannotCastException ex) {
+                    // Python should only permit str literals or calls to `format` builtin as
+                    // argument to this operation. The `format` builtin already ensures the result
+                    // is a Python string.
+                    throw CompilerDirectives.shouldNotReachHere(ex);
+                }
             }
             return toString.execute(tsb);
         }
@@ -3312,20 +3591,19 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
     }
 
     /**
-     * Resumes execution after yield.
+     * Prepares for resuming execution after yield: sets up exception context. This needs to be done
+     * before yield instrumentation, which needs to be done before receiving the sent value, which
+     * may potentially raise an exception passed in
+     * {@link com.oracle.graal.python.builtins.objects.generator.ThrowData}.
      */
-    @Operation(storeBytecodeIndex = true)
+    @Operation(storeBytecodeIndex = false)
     @ConstantOperand(type = LocalAccessor.class)
     @ConstantOperand(type = LocalAccessor.class)
-    public static final class ResumeYield {
+    public static final class PreResumeYield {
         @Specialization
         public static Object doObject(VirtualFrame frame, LocalAccessor currentGeneratorException, LocalAccessor savedException, Object sendValue,
-                        @Bind Node location,
-                        @Bind PBytecodeDSLRootNode root,
-                        @Bind BytecodeNode bytecode,
-                        @Bind("$bytecodeIndex") int bci,
-                        @Cached GetSendValueNode getSendValue) {
-            if (savedException != currentGeneratorException) {
+                        @Bind BytecodeNode bytecode) {
+            if (!savedException.equals(currentGeneratorException)) {
                 // We cannot pass `null` as savedException, so savedException ==
                 // currentGeneratorException means "no saveException"
                 //
@@ -3348,21 +3626,42 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
                 }
             }
 
-            if (root.needsTraceAndProfileInstrumentation()) {
-                // We may not have reparsed the root with instrumentation yet.
-                root.ensureTraceAndProfileEnabled();
-                root.getThreadState().pushInstrumentationData(root);
-                root.traceOrProfileCall(frame, bytecode, bci);
-            }
+            return sendValue;
+        }
+    }
 
+    /**
+     * Wraps {@link ResumeYield} to trace the resume event.
+     */
+    @Instrumentation(storeBytecodeIndex = true)
+    public static final class ResumeInstrumentedYield {
+        @Specialization
+        public static Object doObject(VirtualFrame frame, Object sendValue,
+                        @Bind PBytecodeDSLRootNode root,
+                        @Bind BytecodeNode bytecode,
+                        @Bind("$bytecodeIndex") int bci) {
+            root.resetInstrumentationDataForResume(frame, bytecode, bci);
+            root.traceOrProfileCall(frame, bytecode, bci);
+            return sendValue;
+        }
+    }
+
+    /**
+     * Resumes execution after yield.
+     */
+    @Operation(storeBytecodeIndex = true)
+    public static final class ResumeYield {
+        @Specialization
+        public static Object doObject(Object sendValue,
+                        @Cached GetSendValueNode getSendValue) {
             return getSendValue.execute(sendValue);
         }
     }
 
-    @Operation(storeBytecodeIndex = true)
+    /** Used in implementation of {@code yield from} */
+    @Operation(storeBytecodeIndex = true, forceCached = true)
     @ConstantOperand(type = LocalAccessor.class)
     @ConstantOperand(type = LocalAccessor.class)
-    @SuppressWarnings("truffle-interpreted-performance")
     public static final class YieldFromSend {
         private static final TruffleString T_SEND = tsLiteral("send");
 
@@ -3375,8 +3674,8 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
                         @Bind Node inliningTarget,
                         @Bind BytecodeNode bytecode,
                         @Cached CommonGeneratorBuiltins.SendNode sendNode,
-                        @Shared @Cached IsBuiltinObjectProfile stopIterationProfile,
-                        @Shared @Cached StopIterationBuiltins.StopIterationValueNode getValue) {
+                        @Exclusive @Cached IsBuiltinObjectProfile stopIterationProfile,
+                        @Exclusive @Cached StopIterationBuiltins.StopIterationValueNode getValue) {
             try {
                 Object value = sendNode.execute(virtualFrame, generator, arg);
                 yieldedValue.setObject(bytecode, virtualFrame, value);
@@ -3403,8 +3702,8 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
                         @Bind("getSlots.execute(inliningTarget, iter)") TpSlots slots,
                         @Cached CallSlotTpIterNextNode callIterNext,
                         @Exclusive @Cached InlinedBranchProfile exhaustedNoException,
-                        @Shared @Cached IsBuiltinObjectProfile stopIterationProfile,
-                        @Shared @Cached StopIterationBuiltins.StopIterationValueNode getValue) {
+                        @Exclusive @Cached IsBuiltinObjectProfile stopIterationProfile,
+                        @Exclusive @Cached StopIterationBuiltins.StopIterationValueNode getValue) {
             try {
                 Object value = callIterNext.execute(virtualFrame, inliningTarget, slots.tp_iternext(), iter);
                 yieldedValue.setObject(bytecode, virtualFrame, value);
@@ -3429,8 +3728,8 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
                         @Bind BytecodeNode bytecode,
                         @Bind("$bytecodeIndex") int bci,
                         @Cached PyObjectCallMethodObjArgs callMethodNode,
-                        @Shared @Cached IsBuiltinObjectProfile stopIterationProfile,
-                        @Shared @Cached StopIterationBuiltins.StopIterationValueNode getValue) {
+                        @Exclusive @Cached IsBuiltinObjectProfile stopIterationProfile,
+                        @Exclusive @Cached StopIterationBuiltins.StopIterationValueNode getValue) {
             try {
                 Object value = callMethodNode.execute(virtualFrame, inliningTarget, obj, T_SEND, arg);
                 yieldedValue.setObject(bytecode, virtualFrame, value);
@@ -3451,10 +3750,10 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
 
     }
 
-    @Operation(storeBytecodeIndex = true)
+    /** used in the implementation of {@code yield from} */
+    @Operation(storeBytecodeIndex = true, forceCached = true)
     @ConstantOperand(type = LocalAccessor.class)
     @ConstantOperand(type = LocalAccessor.class)
-    @SuppressWarnings("truffle-interpreted-performance")
     public static final class YieldFromThrow {
 
         private static final TruffleString T_CLOSE = tsLiteral("close");
@@ -3470,9 +3769,9 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
                         @Bind BytecodeNode bytecode,
                         @Cached CommonGeneratorBuiltins.ThrowNode throwNode,
                         @Cached CommonGeneratorBuiltins.CloseNode closeNode,
-                        @Shared @Cached IsBuiltinObjectProfile profileExit,
-                        @Shared @Cached IsBuiltinObjectProfile stopIterationProfile,
-                        @Shared @Cached StopIterationBuiltins.StopIterationValueNode getValue) {
+                        @Exclusive @Cached IsBuiltinObjectProfile profileExit,
+                        @Exclusive @Cached IsBuiltinObjectProfile stopIterationProfile,
+                        @Exclusive @Cached StopIterationBuiltins.StopIterationValueNode getValue) {
             if (profileExit.profileException(inliningTarget, exception, GeneratorExit)) {
                 closeNode.execute(frame, generator);
                 throw exception;
@@ -3501,9 +3800,9 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
                         @Cached CallNode callThrow,
                         @Cached CallNode callClose,
                         @Cached WriteUnraisableNode writeUnraisableNode,
-                        @Shared @Cached IsBuiltinObjectProfile profileExit,
-                        @Shared @Cached IsBuiltinObjectProfile stopIterationProfile,
-                        @Shared @Cached StopIterationBuiltins.StopIterationValueNode getValue) {
+                        @Exclusive @Cached IsBuiltinObjectProfile profileExit,
+                        @Exclusive @Cached IsBuiltinObjectProfile stopIterationProfile,
+                        @Exclusive @Cached StopIterationBuiltins.StopIterationValueNode getValue) {
             PException pException = (PException) exception;
             if (profileExit.profileException(inliningTarget, pException, GeneratorExit)) {
                 Object close = PNone.NO_VALUE;
@@ -3570,8 +3869,13 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
                         @Bind BytecodeNode bytecodeNode,
                         @Cached IsBuiltinObjectProfile isStopAsyncIteration) {
             if (!isStopAsyncIteration.profileException(inliningTarget, exception, PythonBuiltinClassType.StopAsyncIteration)) {
-                throw exception.getExceptionForReraise(!((PBytecodeDSLRootNode) bytecodeNode.getRootNode()).internal);
+                reraiseException(exception, bytecodeNode);
             }
+        }
+
+        @InliningCutoff
+        private static void reraiseException(PException exception, BytecodeNode bytecodeNode) {
+            throw exception.getExceptionForReraise(!((PBytecodeDSLRootNode) bytecodeNode.getRootNode()).internal);
         }
 
         @Specialization(guards = "!isPException(exception)")
@@ -3580,38 +3884,15 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
         }
     }
 
-    /**
-     * Loads a user-defined local variable. Unlike a built-in LoadLocal, this operation raises an
-     * unbound local error if the local has not been set.
-     * <p>
-     * This operation makes use of Truffle's boxing overloads. When an operation tries to quicken
-     * this one for boxing elimination, the correct overload will be selected.
-     */
     @Operation(storeBytecodeIndex = false)
     @ConstantOperand(type = LocalAccessor.class)
-    @ConstantOperand(type = int.class)
-    public static final class CheckAndLoadLocal {
-        @Specialization(rewriteOn = {FrameSlotTypeException.class, UnexpectedResultException.class})
-        public static int doInt(VirtualFrame frame, LocalAccessor accessor, int index,
-                        @Bind BytecodeNode bytecodeNode) throws UnexpectedResultException {
-            return accessor.getInt(bytecodeNode, frame);
-        }
-
-        @Specialization(replaces = "doInt", rewriteOn = FrameSlotTypeException.class)
-        public static Object doObject(VirtualFrame frame, LocalAccessor accessor, int index,
+    public static final class LoadAndClearTempLocal {
+        @Specialization
+        public static Object doObject(VirtualFrame frame, LocalAccessor accessor,
                         @Bind BytecodeNode bytecodeNode) {
-            return accessor.getObject(bytecodeNode, frame);
-        }
-
-        @StoreBytecodeIndex
-        @Specialization(replaces = "doObject")
-        public static Object doObjectOrUnbound(VirtualFrame frame, LocalAccessor accessor, int index,
-                        @Bind BytecodeNode bytecodeNode) {
-            try {
-                return accessor.getObject(bytecodeNode, frame);
-            } catch (FrameSlotTypeException e) {
-                throw raiseUnbound(bytecodeNode, index);
-            }
+            Object result = accessor.getObject(bytecodeNode, frame);
+            accessor.clear(bytecodeNode, frame);
+            return result;
         }
     }
 
@@ -3772,7 +4053,7 @@ public abstract class PBytecodeDSLRootNode extends PRootNode implements Bytecode
     }
 
     @ImportStatic(PGuards.class)
-    @Operation(storeBytecodeIndex = true)
+    @Operation(storeBytecodeIndex = true, forceCached = true)
     @GenerateInline(false)
     @ConstantOperand(type = LocalAccessor.class)
     @ConstantOperand(type = LocalAccessor.class)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -75,6 +75,7 @@ import com.oracle.graal.python.builtins.modules.CmathModuleBuiltins;
 import com.oracle.graal.python.builtins.modules.CodecsModuleBuiltins;
 import com.oracle.graal.python.builtins.modules.CodecsTruffleModuleBuiltins;
 import com.oracle.graal.python.builtins.modules.CollectionsModuleBuiltins;
+import com.oracle.graal.python.builtins.modules.codecs.CodecsRegistry;
 import com.oracle.graal.python.builtins.modules.ContextvarsModuleBuiltins;
 import com.oracle.graal.python.builtins.modules.CryptModuleBuiltins;
 import com.oracle.graal.python.builtins.modules.ErrnoModuleBuiltins;
@@ -98,11 +99,11 @@ import com.oracle.graal.python.builtins.modules.PosixModuleBuiltins;
 import com.oracle.graal.python.builtins.modules.PosixShMemModuleBuiltins;
 import com.oracle.graal.python.builtins.modules.PosixSubprocessModuleBuiltins;
 import com.oracle.graal.python.builtins.modules.PwdModuleBuiltins;
+import com.oracle.graal.python.builtins.modules.pyexpat.PyExpatModuleBuiltins;
 import com.oracle.graal.python.builtins.modules.QueueModuleBuiltins;
 import com.oracle.graal.python.builtins.modules.RandomModuleBuiltins;
 import com.oracle.graal.python.builtins.modules.ReadlineModuleBuiltins;
 import com.oracle.graal.python.builtins.modules.ResourceModuleBuiltins;
-import com.oracle.graal.python.builtins.modules.SREModuleBuiltins;
 import com.oracle.graal.python.builtins.modules.SSLModuleBuiltins;
 import com.oracle.graal.python.builtins.modules.SelectModuleBuiltins;
 import com.oracle.graal.python.builtins.modules.SignalModuleBuiltins;
@@ -202,6 +203,11 @@ import com.oracle.graal.python.builtins.modules.pickle.PicklerBuiltins;
 import com.oracle.graal.python.builtins.modules.pickle.PicklerMemoProxyBuiltins;
 import com.oracle.graal.python.builtins.modules.pickle.UnpicklerBuiltins;
 import com.oracle.graal.python.builtins.modules.pickle.UnpicklerMemoProxyBuiltins;
+import com.oracle.graal.python.builtins.modules.re.MatchBuiltins;
+import com.oracle.graal.python.builtins.modules.re.PatternBuiltins;
+import com.oracle.graal.python.builtins.modules.re.SREModuleBuiltins;
+import com.oracle.graal.python.builtins.modules.re.SREScannerBuiltins;
+import com.oracle.graal.python.builtins.modules.weakref.ProxyTypeBuiltins;
 import com.oracle.graal.python.builtins.modules.zlib.ZLibModuleBuiltins;
 import com.oracle.graal.python.builtins.modules.zlib.ZlibCompressBuiltins;
 import com.oracle.graal.python.builtins.modules.zlib.ZlibDecompressBuiltins;
@@ -220,6 +226,7 @@ import com.oracle.graal.python.builtins.objects.bytes.BytesBuiltins;
 import com.oracle.graal.python.builtins.objects.bytes.BytesCommonBuiltins;
 import com.oracle.graal.python.builtins.objects.cell.CellBuiltins;
 import com.oracle.graal.python.builtins.objects.code.CodeBuiltins;
+import com.oracle.graal.python.builtins.objects.code.PCode;
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
 import com.oracle.graal.python.builtins.objects.complex.ComplexBuiltins;
 import com.oracle.graal.python.builtins.objects.contextvars.ContextBuiltins;
@@ -243,6 +250,7 @@ import com.oracle.graal.python.builtins.objects.exception.BaseExceptionBuiltins;
 import com.oracle.graal.python.builtins.objects.exception.BaseExceptionGroupBuiltins;
 import com.oracle.graal.python.builtins.objects.exception.ImportErrorBuiltins;
 import com.oracle.graal.python.builtins.objects.exception.KeyErrorBuiltins;
+import com.oracle.graal.python.builtins.objects.exception.NameErrorBuiltins;
 import com.oracle.graal.python.builtins.objects.exception.OsErrorBuiltins;
 import com.oracle.graal.python.builtins.objects.exception.StopIterationBuiltins;
 import com.oracle.graal.python.builtins.objects.exception.SyntaxErrorBuiltins;
@@ -261,6 +269,7 @@ import com.oracle.graal.python.builtins.objects.foreign.ForeignInstantiableBuilt
 import com.oracle.graal.python.builtins.objects.foreign.ForeignIterableBuiltins;
 import com.oracle.graal.python.builtins.objects.foreign.ForeignNumberBuiltins;
 import com.oracle.graal.python.builtins.objects.foreign.ForeignObjectBuiltins;
+import com.oracle.graal.python.builtins.objects.foreign.ForeignTimeZoneBuiltins;
 import com.oracle.graal.python.builtins.objects.frame.FrameBuiltins;
 import com.oracle.graal.python.builtins.objects.function.AbstractFunctionBuiltins;
 import com.oracle.graal.python.builtins.objects.function.BuiltinFunctionBuiltins;
@@ -359,6 +368,7 @@ import com.oracle.graal.python.builtins.objects.traceback.TracebackBuiltins;
 import com.oracle.graal.python.builtins.objects.tuple.InstantiableStructSequenceBuiltins;
 import com.oracle.graal.python.builtins.objects.tuple.StructSequenceBuiltins;
 import com.oracle.graal.python.builtins.objects.tuple.TupleBuiltins;
+import com.oracle.graal.python.builtins.modules.pyexpat.XMLParserBuiltins;
 import com.oracle.graal.python.builtins.objects.tuple.TupleGetterBuiltins;
 import com.oracle.graal.python.builtins.objects.type.PythonBuiltinClass;
 import com.oracle.graal.python.builtins.objects.type.PythonManagedClass;
@@ -427,7 +437,6 @@ public abstract class Python3Core {
         // Order matters!
         List<TruffleString> coreFiles = List.of(
                         T___GRAALPYTHON__,
-                        T__WEAKREF,
                         T__SRE,
                         T__SYSCONFIG,
                         T_JAVA,
@@ -461,6 +470,7 @@ public abstract class Python3Core {
                 toRemove.add(builtin);
             } else {
                 CoreFunctions annotation = builtin.getClass().getAnnotation(CoreFunctions.class);
+                builtin.setNeedsPostInitialize(annotation.isEager() || annotation.extendClasses().length != 0);
                 if (annotation.os() != PythonOS.PLATFORM_ANY && annotation.os() != currentOs) {
                     toRemove.add(builtin);
                 }
@@ -493,6 +503,7 @@ public abstract class Python3Core {
                         new ForeignObjectBuiltins(),
                         new ForeignNumberBuiltins(),
                         new ForeignBooleanBuiltins(),
+                        new ForeignTimeZoneBuiltins(),
                         new ForeignAbstractClassBuiltins(),
                         new ForeignExecutableBuiltins(),
                         new ForeignInstantiableBuiltins(),
@@ -566,6 +577,7 @@ public abstract class Python3Core {
                         new RandomBuiltins(),
                         new WeakRefModuleBuiltins(),
                         new ReferenceTypeBuiltins(),
+                        new ProxyTypeBuiltins(),
                         new TracemallocModuleBuiltins(),
                         new SysconfigModuleBuiltins(),
                         // contextvars
@@ -579,6 +591,7 @@ public abstract class Python3Core {
                         new com.oracle.graal.python.builtins.objects.types.UnionTypeBuiltins(),
                         // exceptions
                         new AttributeErrorBuiltins(),
+                        new NameErrorBuiltins(),
                         new SystemExitBuiltins(),
                         new ImportErrorBuiltins(),
                         new StopIterationBuiltins(),
@@ -652,8 +665,10 @@ public abstract class Python3Core {
                         new JavaModuleBuiltins(),
                         new JArrayModuleBuiltins(),
                         new CSVModuleBuiltins(),
+                        new PyExpatModuleBuiltins(),
                         new JSONModuleBuiltins(),
                         new SREModuleBuiltins(),
+                        new XMLParserBuiltins(),
                         new AstModuleBuiltins(),
                         PythonImageBuildOptions.WITHOUT_NATIVE_POSIX && (PythonImageBuildOptions.WITHOUT_JAVA_INET || !env.isSocketIOAllowed()) ? null : new SelectModuleBuiltins(),
                         PythonImageBuildOptions.WITHOUT_NATIVE_POSIX && (PythonImageBuildOptions.WITHOUT_JAVA_INET || !env.isSocketIOAllowed()) ? null : new SocketModuleBuiltins(),
@@ -773,7 +788,7 @@ public abstract class Python3Core {
                         new StructBuiltins(),
                         new StructUnpackIteratorBuiltins(),
 
-                        // datetime
+                        // _datetime
                         new DateBuiltins(),
                         new TimeDeltaBuiltins(),
                         new DateTimeBuiltins(),
@@ -782,6 +797,11 @@ public abstract class Python3Core {
                         new TzInfoBuiltins(),
                         new TimeZoneBuiltins(),
                         new DatetimeModuleBuiltins(),
+
+                        // _sre
+                        new PatternBuiltins(),
+                        new MatchBuiltins(),
+                        new SREScannerBuiltins(),
 
                         // _asyncio
                         new AsyncioModuleBuiltins(),
@@ -926,6 +946,9 @@ public abstract class Python3Core {
         this.builtins = initializeBuiltins(context.getEnv());
         initializeJavaCore();
         initializeImportlib();
+        if (context.getEnv().isPreInitialization()) {
+            CodecsRegistry.initialize(context);
+        }
         context.applyModuleOptions();
         initializePython3Core(context.getCoreHomeOrFail());
         initialized = true;
@@ -1038,8 +1061,7 @@ public abstract class Python3Core {
             initialized = false;
 
             for (PythonBuiltins builtin : builtins) {
-                CoreFunctions annotation = builtin.getClass().getAnnotation(CoreFunctions.class);
-                if (annotation.isEager() || annotation.extendClasses().length != 0) {
+                if (builtin.needsPostInitialize()) {
                     builtin.postInitialize(this);
                 }
             }
@@ -1317,7 +1339,8 @@ public abstract class Python3Core {
             return getLanguage().parse(getContext(), source, InputType.FILE, false, 0, false, null, EnumSet.noneOf(FutureFeature.class));
         };
         RootCallTarget callTarget = (RootCallTarget) getLanguage().cacheCode(s, getCode);
-        CallDispatchers.SimpleIndirectInvokeNode.executeUncached(callTarget, PArguments.withGlobals(mod));
+        PCode code = PFactory.createCode(language, callTarget);
+        CallDispatchers.SimpleIndirectInvokeNode.executeUncached(callTarget, PArguments.withGlobals(code, mod));
     }
 
     public final PInt getTrue() {

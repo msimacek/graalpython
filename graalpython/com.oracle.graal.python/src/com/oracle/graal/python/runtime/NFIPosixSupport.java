@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -79,6 +79,7 @@ import static com.oracle.graal.python.util.PythonUtils.ARRAY_ACCESSOR;
 import static com.oracle.graal.python.util.PythonUtils.ARRAY_ACCESSOR_BE;
 import static com.oracle.graal.python.util.PythonUtils.EMPTY_LONG_ARRAY;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
+import static com.oracle.graal.python.util.PythonUtils.callCallTarget;
 import static com.oracle.truffle.api.CompilerDirectives.SLOWPATH_PROBABILITY;
 import static com.oracle.truffle.api.CompilerDirectives.injectBranchProbability;
 import static com.oracle.truffle.api.CompilerDirectives.shouldNotReachHere;
@@ -88,9 +89,10 @@ import java.util.ArrayList;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.logging.Level;
 
+import org.graalvm.nativeimage.ImageInfo;
 import com.oracle.graal.python.PythonLanguage;
-import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.annotations.PythonOS;
+import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.exception.OSErrorEnum;
 import com.oracle.graal.python.nodes.ErrorMessages;
@@ -117,6 +119,7 @@ import com.oracle.graal.python.runtime.PosixSupportLibrary.UnixSockAddr;
 import com.oracle.graal.python.util.FunctionWithSignature;
 import com.oracle.graal.python.util.OverflowException;
 import com.oracle.graal.python.util.PythonUtils;
+import com.oracle.truffle.api.ArrayUtils;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
@@ -227,6 +230,11 @@ public final class NFIPosixSupport extends PosixSupport {
         get_blocking("(sint32):sint32"),
         set_blocking("(sint32, sint32):sint32"),
         get_terminal_size("(sint32, [sint32]):sint32"),
+        call_raise("(sint32):sint32"),
+        call_alarm("(sint32):sint32"),
+        call_getitimer("(sint32, [sint64]):sint32"),
+        call_setitimer("(sint32, [sint64], [sint64]):sint32"),
+        signal_self("(sint32):sint32"),
         call_kill("(sint64, sint32):sint32"),
         call_killpg("(sint64, sint32):sint32"),
         call_waitpid("(sint64, [sint32], sint32):sint64"),
@@ -339,10 +347,10 @@ public final class NFIPosixSupport extends PosixSupport {
 
         public Object call(NFIPosixSupport posix, PosixNativeFunction function, Object... args) {
             if (injectBranchProbability(SLOWPATH_PROBABILITY, posix.nfiLibrary == null)) {
-                loadLibrary(posix);
+                loadLibrary(this, posix);
             }
             if (injectBranchProbability(SLOWPATH_PROBABILITY, posix.cachedFunctions.get(function.ordinal()) == null)) {
-                loadFunction(posix, posix.nfiLibrary, function);
+                loadFunction(this, posix, posix.nfiLibrary, function);
             }
             FunctionWithSignature funObject = posix.cachedFunctions.get(function.ordinal());
             try {
@@ -386,10 +394,10 @@ public final class NFIPosixSupport extends PosixSupport {
         }
 
         @TruffleBoundary
-        private static void loadLibrary(NFIPosixSupport posix) {
+        private static void loadLibrary(Node node, NFIPosixSupport posix) {
             String path = getLibPath(posix.context);
             try {
-                posix.nfiLibrary = loadLibrary(posix, path);
+                posix.nfiLibrary = loadLibrary(node, posix, path);
             } catch (Throwable e) {
                 throw new UnsupportedOperationException(String.format("""
                                 Could not load posix support library from path '%s'. Troubleshooting:\s
@@ -400,7 +408,7 @@ public final class NFIPosixSupport extends PosixSupport {
         }
 
         @TruffleBoundary
-        private static Object loadLibrary(NFIPosixSupport posix, String path) {
+        private static Object loadLibrary(Node node, NFIPosixSupport posix, String path) {
             String backend = posix.nfiBackend.toJavaStringUncached();
             Env env = posix.context.getEnv();
 
@@ -418,19 +426,18 @@ public final class NFIPosixSupport extends PosixSupport {
                 loadSrc = Source.newBuilder(J_NFI_LANGUAGE, J_DEFAULT, J_DEFAULT).internal(true).build();
             }
 
-            return env.parseInternal(loadSrc).call();
+            return callCallTarget(env.parseInternal(loadSrc), node);
         }
 
         @TruffleBoundary
-        private static void loadFunction(NFIPosixSupport posix, Object library, PosixNativeFunction function) {
+        private static void loadFunction(Node node, NFIPosixSupport posix, Object library, PosixNativeFunction function) {
             Object unbound;
             try {
                 InteropLibrary interop = InteropLibrary.getUncached();
 
                 String sig = String.format("with %s %s", posix.nfiBackend, function.signature);
                 Source sigSrc = Source.newBuilder(J_NFI_LANGUAGE, sig, "posix-nfi-signature").internal(true).build();
-                Object signature = posix.context.getEnv().parseInternal(sigSrc).call();
-
+                Object signature = PythonUtils.callCallTarget(posix.context.getEnv().parseInternal(sigSrc), node);
                 unbound = interop.readMember(library, function.name());
                 posix.cachedFunctions.set(function.ordinal(), new FunctionWithSignature(signature, unbound));
             } catch (UnsupportedMessageException | UnknownIdentifierException e) {
@@ -1158,6 +1165,55 @@ public final class NFIPosixSupport extends PosixSupport {
     public void kill(long pid, int signal,
                     @Shared("invoke") @Cached InvokeNativeFunction invokeNode) throws PosixException {
         int res = invokeNode.callInt(this, PosixNativeFunction.call_kill, pid, signal);
+        if (res == -1) {
+            throw getErrnoAndThrowPosixException(invokeNode);
+        }
+    }
+
+    @ExportMessage
+    public void raise(int signal,
+                    @Shared("invoke") @Cached InvokeNativeFunction invokeNode) throws PosixException {
+        int res = invokeNode.callInt(this, PosixNativeFunction.call_raise, signal);
+        if (res == -1) {
+            throw getErrnoAndThrowPosixException(invokeNode);
+        }
+    }
+
+    @ExportMessage
+    public int alarm(int seconds,
+                    @Shared("invoke") @Cached InvokeNativeFunction invokeNode) {
+        return invokeNode.callInt(this, PosixNativeFunction.call_alarm, seconds);
+    }
+
+    @ExportMessage
+    public Timeval[] getitimer(int which,
+                    @Shared("invoke") @Cached InvokeNativeFunction invokeNode) throws PosixException {
+        long[] currentValue = new long[4];
+        int res = invokeNode.callInt(this, PosixNativeFunction.call_getitimer, which, currentValue);
+        if (res == -1) {
+            throw getErrnoAndThrowPosixException(invokeNode);
+        }
+        return unwrapTimeval(currentValue);
+    }
+
+    @ExportMessage
+    public Timeval[] setitimer(int which, Timeval delay, Timeval interval,
+                    @Shared("invoke") @Cached InvokeNativeFunction invokeNode) throws PosixException {
+        long[] oldValue = new long[4];
+        int res = invokeNode.callInt(this, PosixNativeFunction.call_setitimer, which, wrapItimerval(delay, interval), oldValue);
+        if (res == -1) {
+            throw getErrnoAndThrowPosixException(invokeNode);
+        }
+        return unwrapTimeval(oldValue);
+    }
+
+    @ExportMessage
+    public void signalSelf(int signal,
+                    @Shared("invoke") @Cached InvokeNativeFunction invokeNode) throws PosixException {
+        if (!ImageInfo.inImageRuntimeCode()) {
+            throw new UnsupportedPosixFeatureException("self-signals are only supported in native standalone");
+        }
+        int res = invokeNode.callInt(this, PosixNativeFunction.signal_self, signal);
         if (res == -1) {
             throw getErrnoAndThrowPosixException(invokeNode);
         }
@@ -1915,10 +1971,12 @@ public final class NFIPosixSupport extends PosixSupport {
 
     @ExportMessage
     public TruffleString crypt(TruffleString word, TruffleString salt,
+                    @Bind Node inliningTarget,
                     @Shared("invoke") @Cached InvokeNativeFunction invokeNode,
                     @Shared("toUtf8") @Cached TruffleString.SwitchEncodingNode switchEncodingToUtf8Node,
                     @Shared("tsCopyBytes") @Cached TruffleString.CopyToByteArrayNode copyToByteArrayNode,
-                    @Shared("tsFromBytes") @Cached TruffleString.FromByteArrayNode fromByteArrayNode,
+                    @Cached TruffleString.FromZeroTerminatedNativePointerNode fromZeroTerminatedNativePointerNode,
+                    @Cached TruffleString.AsManagedNode asManagedNode,
                     @Shared("fromUtf8") @Cached TruffleString.SwitchEncodingNode switchEncodingFromUtf8Node) throws PosixException {
         /*
          * We don't want to link the posix library with libcrypt, because it might not be available
@@ -1927,7 +1985,7 @@ public final class NFIPosixSupport extends PosixSupport {
          */
         if (injectBranchProbability(SLOWPATH_PROBABILITY, cryptLibrary == null)) {
             try {
-                cryptLibrary = InvokeNativeFunction.loadLibrary(this, PythonLanguage.getPythonOS() != PythonOS.PLATFORM_DARWIN ? "libcrypt.so" : null);
+                cryptLibrary = InvokeNativeFunction.loadLibrary(inliningTarget, this, PythonLanguage.getPythonOS() != PythonOS.PLATFORM_DARWIN ? "libcrypt.so" : null);
             } catch (Throwable e) {
                 CompilerDirectives.transferToInterpreterAndInvalidate();
                 throw PRaiseNode.raiseStatic(invokeNode, PythonBuiltinClassType.SystemError, ErrorMessages.UNABLE_TO_LOAD_LIBCRYPT);
@@ -1935,7 +1993,7 @@ public final class NFIPosixSupport extends PosixSupport {
         }
         PosixNativeFunction function = PosixNativeFunction.crypt;
         if (injectBranchProbability(SLOWPATH_PROBABILITY, cachedFunctions.get(function.ordinal()) == null)) {
-            InvokeNativeFunction.loadFunction(this, cryptLibrary, function);
+            InvokeNativeFunction.loadFunction(inliningTarget, this, cryptLibrary, function);
         }
         FunctionWithSignature funObject = cachedFunctions.get(function.ordinal());
         /*
@@ -1962,13 +2020,9 @@ public final class NFIPosixSupport extends PosixSupport {
             if (resultPtr == 0) {
                 throw getErrnoAndThrowPosixException(invokeNode);
             }
-            int len = 0;
-            while (UNSAFE.getByte(resultPtr + len) != 0) {
-                len++;
-            }
-            byte[] resultBytes = new byte[len];
-            UNSAFE.copyMemory(null, resultPtr, resultBytes, Unsafe.ARRAY_BYTE_BASE_OFFSET, len);
-            return createString(resultBytes, 0, resultBytes.length, false, fromByteArrayNode, switchEncodingFromUtf8Node);
+            // TODO PyUnicode_DecodeFSDefault
+            TruffleString utf8 = fromZeroTerminatedNativePointerNode.execute8Bit(resultPtr, 0, UTF_8, false);
+            return asManagedNode.execute(switchEncodingFromUtf8Node.execute(utf8, TS_ENCODING), TS_ENCODING);
         }
     }
 
@@ -2275,13 +2329,7 @@ public final class NFIPosixSupport extends PosixSupport {
                 pathBuf = PythonUtils.arrayCopyOfRange(data, pathOffset, pathOffset + linuxAddrLen);
             } else {
                 // Regular NULL-terminated string
-                int pathLen = -1;
-                for (int i = pathOffset; i < data.length; i++) {
-                    if (data[i] == '\0') {
-                        pathLen = i - pathOffset;
-                        break;
-                    }
-                }
+                int pathLen = ArrayUtils.indexOf(data, pathOffset, data.length, (byte) 0) - pathOffset;
                 assert pathLen >= 0;
                 pathBuf = PythonUtils.arrayCopyOfRange(data, pathOffset, pathOffset + pathLen);
             }
@@ -2545,11 +2593,8 @@ public final class NFIPosixSupport extends PosixSupport {
             throw outOfMemoryPosixError();
         }
         int offset = (int) longOffset;
-        int end = offset;
-        while (end < buffer.length && buffer[end] != '\0') {
-            end++;
-        }
-        if (end == buffer.length) {
+        int end = ArrayUtils.indexOf(buffer, offset, buffer.length, (byte) 0);
+        if (end < 0) {
             throw CompilerDirectives.shouldNotReachHere("Could not find the end of the string");
         }
         // TODO PyUnicode_DecodeFSDefault
@@ -2695,6 +2740,14 @@ public final class NFIPosixSupport extends PosixSupport {
         } else {
             return new long[]{timeval[0].getSeconds(), timeval[0].getMicroseconds(), timeval[1].getSeconds(), timeval[1].getMicroseconds()};
         }
+    }
+
+    private static long[] wrapItimerval(Timeval delay, Timeval interval) {
+        return new long[]{delay.getSeconds(), delay.getMicroseconds(), interval.getSeconds(), interval.getMicroseconds()};
+    }
+
+    private static Timeval[] unwrapTimeval(long[] timeval) {
+        return new Timeval[]{new Timeval(timeval[0], timeval[1]), new Timeval(timeval[2], timeval[3])};
     }
 
     private static TruffleString cStringToTruffleString(byte[] buf, TruffleString.FromByteArrayNode fromByteArrayNode, TruffleString.SwitchEncodingNode switchEncodingNode) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -80,7 +80,6 @@ import com.oracle.graal.python.builtins.modules.BuiltinFunctions.IsSubClassNode;
 import com.oracle.graal.python.builtins.modules.WarningsModuleBuiltinsClinicProviders.WarnBuiltinNodeClinicProviderGen;
 import com.oracle.graal.python.builtins.modules.WarningsModuleBuiltinsFactory.WarnBuiltinNodeFactory;
 import com.oracle.graal.python.builtins.objects.PNone;
-import com.oracle.graal.python.builtins.objects.code.PCode;
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.frame.PFrame;
@@ -113,7 +112,6 @@ import com.oracle.graal.python.nodes.function.builtins.PythonClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
 import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinObjectProfile;
 import com.oracle.graal.python.nodes.object.GetClassNode;
-import com.oracle.graal.python.nodes.object.GetDictFromGlobalsNode;
 import com.oracle.graal.python.nodes.object.GetOrCreateDictNode;
 import com.oracle.graal.python.nodes.statement.AbstractImportNode;
 import com.oracle.graal.python.nodes.util.CannotCastException;
@@ -141,7 +139,6 @@ import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.profiles.BranchProfile;
 import com.oracle.truffle.api.strings.TruffleString;
 
@@ -215,7 +212,6 @@ public final class WarningsModuleBuiltins extends PythonBuiltins {
         @Child PyObjectIsTrueNode isTrueNode;
         @Child IsSubClassNode isSubClassNode;
         @Child GetOrCreateDictNode getDictNode;
-        @Child GetDictFromGlobalsNode getDictFromGlobalsNode;
         @Child ReadFrameNode readFrameNode;
         @Child PyObjectLookupAttr lookupAttrNode;
         @Child PyObjectCallMethodObjArgs callMethodNode;
@@ -398,15 +394,6 @@ public final class WarningsModuleBuiltins extends PythonBuiltins {
             return getDictNode.executeCached(getContext().lookupBuiltinModule(T_SYS));
         }
 
-        private PDict getGlobalsDict(Object globals) {
-            if (getDictFromGlobalsNode == null) {
-                CompilerDirectives.transferToInterpreterAndInvalidate();
-                reportPolymorphicSpecialize();
-                getDictFromGlobalsNode = insert(GetDictFromGlobalsNode.create());
-            }
-            return getDictFromGlobalsNode.executeCached(globals);
-        }
-
         private PFrame getCallerFrame(VirtualFrame frame, int stackLevel, TruffleString[] skipFilePrefixes) {
             if (readFrameNode == null) {
                 CompilerDirectives.transferToInterpreterAndInvalidate();
@@ -414,22 +401,21 @@ public final class WarningsModuleBuiltins extends PythonBuiltins {
                 readFrameNode = insert(ReadFrameNode.create());
             }
             ReadFrameNode.FrameSelector selector = ReadFrameNode.VisiblePythonFramesSelector.INSTANCE;
-            if (skipFilePrefixes != null) {
-                /*
-                 * CPython would always count the first frame into the stacklevel even if it is
-                 * supposed to be skipped. We do that too, but our code is one off because of the
-                 * builtin frame. Let's just assume the common case where the first python frame is
-                 * always skipped by the filter.
-                 */
-                stackLevel--;
-                selector = rootNode -> ReadFrameNode.VisiblePythonFramesSelector.INSTANCE.skip(rootNode) || isFilenameToSkip(skipFilePrefixes, rootNode);
+            if (skipFilePrefixes != null && stackLevel > 0) {
+                PFrame currentFrame = readFrameNode.getCurrentPythonFrame(frame, CallerFlags.NEEDS_LASTI);
+                while (--stackLevel > 0 && currentFrame != null) {
+                    do {
+                        currentFrame = readFrameNode.getFrameForReference(frame, currentFrame.getRef(), selector, 1, CallerFlags.NEEDS_LASTI);
+                    } while (currentFrame != null && isFilenameToSkip(currentFrame.getCode().getFilename(), skipFilePrefixes));
+                }
+                return currentFrame;
+            } else {
+                return readFrameNode.getFrameForReference(frame, PArguments.getCurrentFrameInfo(frame), selector, stackLevel - 1, CallerFlags.NEEDS_LASTI);
             }
-            return readFrameNode.getFrameForReference(frame, PArguments.getCurrentFrameInfo(frame), selector, stackLevel, CallerFlags.NEEDS_LASTI);
         }
 
         @TruffleBoundary
-        private static boolean isFilenameToSkip(TruffleString[] skipFilePrefixes, RootNode rootNode) {
-            TruffleString fileName = PCode.extractFileName(rootNode);
+        private static boolean isFilenameToSkip(TruffleString fileName, TruffleString[] skipFilePrefixes) {
             for (TruffleString prefix : skipFilePrefixes) {
                 if (fileName.byteLength(TS_ENCODING) >= prefix.byteLength(TS_ENCODING) &&
                                 prefix.regionEqualByteIndexUncached(0, fileName, 0, prefix.byteLength(TS_ENCODING), TS_ENCODING)) {
@@ -882,20 +868,18 @@ public final class WarningsModuleBuiltins extends PythonBuiltins {
          * Used from doWarn. On the fast path.
          */
         private void setupContext(VirtualFrame frame, int stackLevel, TruffleString[] skipFilePrefixes, TruffleString[] filename, int[] lineno, TruffleString[] module, Object[] registry) {
-            // the stack level for the intrinsified version is off-by-one compared to the Python
-            // version
-            PFrame f = frame == null ? null : getCallerFrame(frame, stackLevel - 1, skipFilePrefixes);
+            PFrame f = frame == null ? null : getCallerFrame(frame, stackLevel, skipFilePrefixes);
             PDict globals;
             if (f == null || f.getGlobals() == null) {
                 globals = getSysDict();
                 filename[0] = T_SYS;
                 lineno[0] = 1;
             } else {
-                globals = getGlobalsDict(f.getGlobals());
+                globals = (PDict) f.getGlobals();
                 lineno[0] = f.getLine();
                 RootCallTarget ct = f.getTarget();
                 if (ct != null) {
-                    filename[0] = PCode.extractFileName(ct.getRootNode());
+                    filename[0] = f.getCode().getFilename();
                 } else {
                     filename[0] = T_UNKNOWN_SOURCE;
                 }

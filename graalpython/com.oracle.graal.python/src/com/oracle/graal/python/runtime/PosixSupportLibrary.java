@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -257,6 +257,16 @@ public abstract class PosixSupportLibrary extends Library {
     public abstract void fchown(Object receiver, int fd, long owner, long group) throws PosixException;
 
     public abstract Object readlinkat(Object receiver, int dirFd, Object path) throws PosixException;
+
+    public abstract void raise(Object receiver, int signal) throws PosixException;
+
+    public abstract int alarm(Object receiver, int seconds) throws PosixException;
+
+    public abstract Timeval[] getitimer(Object receiver, int which) throws PosixException;
+
+    public abstract Timeval[] setitimer(Object receiver, int which, Timeval delay, Timeval interval) throws PosixException;
+
+    public abstract void signalSelf(Object receiver, int signal) throws PosixException;
 
     public abstract void kill(Object receiver, long pid, int signal) throws PosixException;
 
@@ -910,7 +920,7 @@ public abstract class PosixSupportLibrary extends Library {
      * Exception that indicates and error while executing
      * {@link #getaddrinfo(Object, Object, Object, int, int, int, int)}.
      */
-    public static class GetAddrInfoException extends Exception {
+    public static final class GetAddrInfoException extends Exception {
 
         private static final long serialVersionUID = 3013253817849329391L;
 

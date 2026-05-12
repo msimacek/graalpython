@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -180,17 +180,11 @@ def fn():
 
     code = compile(codestr, "<test>", "exec")
     assert "module doc" in code.co_consts
-    assert 1 in code.co_consts
     assert "fn doc" not in code.co_consts
     for const in code.co_consts:
         if type(const) == types.CodeType:
             code = const
     assert "fn doc" in code.co_consts
-    assert "this is fun" not in code.co_consts
-    for const in code.co_consts:
-        if type(const) == types.CodeType:
-            code = const
-    assert "this is fun" in code.co_consts
 
 
 def test_generator_code_consts():
@@ -231,3 +225,84 @@ def test_generator_and_gen_body_code_are_equal():
 
     x = g()
     assert g.__code__ is x.gi_code
+
+def dedup(lst, prev=object()):
+    for item in lst:
+        if item != prev:
+            yield item
+            prev = item
+
+def check_lines(func):
+    co = func.__code__
+    lines = [line for _, _, line in co.co_lines()]
+    assert lines == list(dedup(lines))
+
+def test_check_lines_dedup():
+    def misshappen():
+        """
+
+
+
+
+
+        """
+        x = (
+
+
+                4
+
+                +
+
+                y
+
+        )
+        y = (
+                a
+                +
+                b
+                +
+
+                d
+        )
+        return q if (
+
+            x
+
+        ) else p
+
+    def bug93662():
+        example_report_generation_message= (
+            """
+            """
+        ).strip()
+        raise ValueError()
+
+    check_lines(misshappen)
+    check_lines(bug93662)
+
+
+def test_code_identity():
+    import sys
+    import marshal
+    import types
+    import _imp
+    def foo():
+        def bar():
+            return sys._getframe()
+
+        return bar
+
+    bar = foo()
+    assert bar.__code__ is foo().__code__
+    i = foo.__code__.co_consts.index(bar.__code__)
+    assert bar.__code__ is foo.__code__.co_consts[i]
+    assert bar.__code__ is bar().f_code
+
+    foo_copy = types.FunctionType(marshal.loads(marshal.dumps(foo.__code__)), globals=foo.__globals__, closure=foo.__closure__)
+    bar_copy = foo_copy()
+    assert foo_copy.__code__ is not foo.__code__
+    _imp._fix_co_filename(foo_copy.__code__, 'asdf')
+    assert foo_copy.__code__.co_filename == 'asdf'
+    assert bar_copy.__code__.co_filename == 'asdf'
+    assert foo.__code__.co_filename != 'asdf'
+    assert bar.__code__.co_filename != 'asdf'

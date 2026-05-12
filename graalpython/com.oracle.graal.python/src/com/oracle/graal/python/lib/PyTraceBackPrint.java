@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -48,6 +48,7 @@ import static com.oracle.graal.python.nodes.StringLiterals.J_NEWLINE;
 import static com.oracle.graal.python.nodes.StringLiterals.T_SPACE;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 import static com.oracle.graal.python.util.PythonUtils.toTruffleStringUncached;
+import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -60,7 +61,6 @@ import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.code.PCode;
 import com.oracle.graal.python.builtins.objects.exception.ExceptionNodes;
-import com.oracle.graal.python.builtins.objects.frame.PFrame;
 import com.oracle.graal.python.builtins.objects.ints.PInt;
 import com.oracle.graal.python.builtins.objects.module.PythonModule;
 import com.oracle.graal.python.builtins.objects.traceback.PTraceback;
@@ -77,7 +77,6 @@ import com.oracle.graal.python.nodes.util.CannotCastException;
 import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
 import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.graal.python.runtime.exception.PException;
-import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.OverflowException;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
@@ -219,11 +218,6 @@ public abstract class PyTraceBackPrint {
         return (i > 0) ? name.substringUncached(i + 1, len - i - 1, TS_ENCODING, true) : name;
     }
 
-    private static PCode getCode(PythonLanguage language, TracebackBuiltins.GetTracebackFrameNode getTbFrameNode, PTraceback tb) {
-        final PFrame pFrame = getTbFrameNode.execute(null, tb);
-        return PFactory.createCode(language, pFrame.getTarget());
-    }
-
     protected static PTraceback getNextTb(Node inliningTarget, TracebackBuiltins.MaterializeTruffleStacktraceNode materializeStNode, PTraceback traceback) {
         materializeStNode.execute(inliningTarget, traceback);
         return traceback.getNext();
@@ -238,16 +232,20 @@ public abstract class PyTraceBackPrint {
         fileWriteString(out, sbToString(sb));
     }
 
-    private static void displayLine(Object out, TruffleString fileName, int lineNo, TruffleString name) {
+    private static void displayLine(Object out, TruffleString fileName, int lineNo, TruffleString name, int indent, TruffleString margin) {
         if (fileName == null || name == null) {
             return;
         }
 
-        final StringBuilder sb = newStringBuilder("  File \"");
+        boolean withIndentOrMargin = indent > 0 || !margin.isEmpty();
+        final StringBuilder sb = withIndentOrMargin ? new StringBuilder() : newStringBuilder("  File \"");
+        if (withIndentOrMargin) {
+            append(sb, getIndent(indent), margin, "  File \"");
+        }
         append(sb, fileName, "\", line ", lineNo, ", in ", name, J_NEWLINE);
         fileWriteString(out, sbToString(sb));
         // ignore errors since we can't report them, can we?
-        displaySourceLine(out, fileName, lineNo, 4);
+        displaySourceLine(out, fileName, lineNo, 4, indent, margin);
     }
 
     protected static TruffleString getIndent(int indent) {
@@ -258,8 +256,8 @@ public abstract class PyTraceBackPrint {
         final PythonContext context = PythonContext.get(null);
         TruffleFile file = null;
         try {
-            file = context.getEnv().getInternalTruffleFile(fileName.toJavaStringUncached());
-        } catch (Exception e) {
+            file = context.getPublicTruffleFileRelaxed(fileName, PythonLanguage.T_DEFAULT_PYTHON_EXTENSIONS);
+        } catch (IllegalArgumentException | SecurityException | UnsupportedOperationException e) {
             return null;
         }
         String line = null;
@@ -281,15 +279,17 @@ public abstract class PyTraceBackPrint {
                     i++;
                 }
             }
-        } catch (IOException ioe) {
+        } catch (IllegalArgumentException | IOException | SecurityException | UnsupportedOperationException e) {
             line = null;
         }
         return line;
     }
 
-    private static void displaySourceLine(Object out, TruffleString fileName, int lineNo, int indent) {
+    private static void displaySourceLine(Object out, TruffleString fileName, int lineNo, int indent, int marginIndent, TruffleString margin) {
         final CharSequence line = getSourceLine(fileName, lineNo);
         if (line != null) {
+            fileWriteString(out, getIndent(marginIndent));
+            fileWriteString(out, margin);
             fileWriteString(out, getIndent(indent));
             fileWriteString(out, trimLeft(line));
             fileWriteString(out, J_NEWLINE);
@@ -324,8 +324,14 @@ public abstract class PyTraceBackPrint {
         return (st > 0 ? sequence.subSequence(st, len) : sequence).toString();
     }
 
+    private static void printIndentedHeader(Object out, String header, int indent, String margin) {
+        String sb = " ".repeat(indent) + margin + header + "\n";
+        fileWriteString(out, sb);
+    }
+
     private static void printInternal(Node inliningTarget, TracebackBuiltins.GetTracebackFrameNode getTbFrameNode,
-                    TracebackBuiltins.MaterializeTruffleStacktraceNode materializeStNode, Object out, PTraceback traceback, long limit) {
+                    TracebackBuiltins.MaterializeTruffleStacktraceNode materializeStNode, Object out, PTraceback traceback, long limit,
+                    int indent, TruffleString margin) {
         int depth = 0;
         TruffleString lastFile = null;
         int lastLine = -1;
@@ -342,9 +348,8 @@ public abstract class PyTraceBackPrint {
             tb = getNextTb(inliningTarget, materializeStNode, tb);
         }
         EqualNode tstrEqNode = EqualNode.getUncached();
-        PythonLanguage language = PythonLanguage.get(inliningTarget);
         while (tb != null) {
-            final PCode code = getCode(language, getTbFrameNode, tb);
+            final PCode code = getTbFrameNode.execute(null, tb).getCode();
             if (lastFile == null || code.getFilename() == null ||
                             !tstrEqNode.execute(code.getFilename(), lastFile, TS_ENCODING) ||
                             lastLine == -1 || tb.getLineno() != lastLine ||
@@ -359,7 +364,7 @@ public abstract class PyTraceBackPrint {
             }
             cnt++;
             if (cnt <= TB_RECURSIVE_CUTOFF) {
-                displayLine(out, code.getFilename(), tb.getLineno(), code.getName());
+                displayLine(out, code.getFilename(), tb.getLineno(), code.getName(), indent, margin);
             }
             tb = getNextTb(inliningTarget, materializeStNode, tb);
         }
@@ -369,7 +374,7 @@ public abstract class PyTraceBackPrint {
     }
 
     public static void print(Node inliningTarget, TracebackBuiltins.GetTracebackFrameNode getTbFrameNode, TracebackBuiltins.MaterializeTruffleStacktraceNode materializeStNode, PythonModule sys,
-                    Object out, Object tbObj) {
+                    Object out, Object tbObj, boolean isExceptionGroup, boolean printMarginControl, int indent, TruffleString margin) {
         // Although we should be behind TB, we need cached nodes, because they may do stack walking
         // and for that they must be connected to the currently executing root. In practice, it's
         // not strictly necessary, because they will never request the current frame, but in order
@@ -377,6 +382,10 @@ public abstract class PyTraceBackPrint {
         CompilerAsserts.neverPartOfCompilation();
         assert inliningTarget != null && inliningTarget.isAdoptable();
         assert getTbFrameNode.isAdoptable();
+
+        if (margin == null) {
+            margin = tsLiteral("");
+        }
 
         if (tbObj instanceof PTraceback tb) {
             long limit = TRACEBACK_LIMIT;
@@ -387,8 +396,20 @@ public abstract class PyTraceBackPrint {
                     return;
                 }
             }
-            fileWriteString(out, "Traceback (most recent call last):\n");
-            printInternal(inliningTarget, getTbFrameNode, materializeStNode, out, tb, limit);
+            if (isExceptionGroup) {
+                if (printMarginControl) {
+                    printIndentedHeader(out, "Exception Group Traceback (most recent call last):", indent, margin.toString());
+                } else {
+                    printIndentedHeader(out, "Exception Group Traceback (most recent call last):", indent, "+ ");
+                }
+            } else {
+                if (printMarginControl) {
+                    printIndentedHeader(out, "Traceback (most recent call last):", indent, "");
+                } else {
+                    printIndentedHeader(out, "Traceback (most recent call last):", indent, margin.toString());
+                }
+            }
+            printInternal(inliningTarget, getTbFrameNode, materializeStNode, out, tb, limit, indent, margin);
         } else {
             throw PRaiseNode.raiseStatic(inliningTarget, PythonBuiltinClassType.SystemError, BAD_ARG_TO_INTERNAL_FUNC);
         }

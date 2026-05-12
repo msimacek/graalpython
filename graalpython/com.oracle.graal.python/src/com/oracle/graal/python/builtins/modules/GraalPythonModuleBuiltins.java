@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -44,11 +44,18 @@ import static com.oracle.graal.python.PythonLanguage.GRAALVM_MAJOR;
 import static com.oracle.graal.python.PythonLanguage.GRAALVM_MICRO;
 import static com.oracle.graal.python.PythonLanguage.GRAALVM_MINOR;
 import static com.oracle.graal.python.PythonLanguage.J_GRAALPYTHON_ID;
+import static com.oracle.graal.python.PythonLanguage.MAGIC_NUMBER;
+import static com.oracle.graal.python.PythonLanguage.MAGIC_NUMBER_BYTES;
 import static com.oracle.graal.python.PythonLanguage.RELEASE_LEVEL;
 import static com.oracle.graal.python.PythonLanguage.RELEASE_LEVEL_FINAL;
 import static com.oracle.graal.python.nodes.BuiltinNames.J_EXTEND;
 import static com.oracle.graal.python.nodes.BuiltinNames.J___GRAALPYTHON__;
+import static com.oracle.graal.python.nodes.BuiltinNames.T_FORMAT;
+import static com.oracle.graal.python.nodes.BuiltinNames.T_MTIME;
+import static com.oracle.graal.python.nodes.BuiltinNames.T_PYEXPAT;
 import static com.oracle.graal.python.nodes.BuiltinNames.T_SHA3;
+import static com.oracle.graal.python.nodes.BuiltinNames.T_SIZE;
+import static com.oracle.graal.python.nodes.BuiltinNames.T__IMP;
 import static com.oracle.graal.python.nodes.BuiltinNames.T___GRAALPYTHON__;
 import static com.oracle.graal.python.nodes.BuiltinNames.T___MAIN__;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___NAME__;
@@ -63,6 +70,7 @@ import static com.oracle.graal.python.nodes.StringLiterals.T_UTF8;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.ImportError;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.SystemError;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
+import static com.oracle.graal.python.util.PythonUtils.ARRAY_ACCESSOR_LE;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 import static com.oracle.graal.python.util.PythonUtils.toTruffleStringUncached;
 import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
@@ -90,6 +98,7 @@ import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.modules.GraalPythonModuleBuiltinsFactory.DebugNodeFactory;
 import com.oracle.graal.python.builtins.modules.cext.PythonCextCapsuleBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.PythonAbstractObject;
 import com.oracle.graal.python.builtins.objects.array.PArray;
 import com.oracle.graal.python.builtins.objects.bytes.PBytes;
 import com.oracle.graal.python.builtins.objects.bytes.PBytesLike;
@@ -97,12 +106,12 @@ import com.oracle.graal.python.builtins.objects.capsule.PyCapsule;
 import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
 import com.oracle.graal.python.builtins.objects.cext.capi.CApiContext;
 import com.oracle.graal.python.builtins.objects.cext.capi.PySequenceArrayWrapper.ToNativeStorageNode;
-import com.oracle.graal.python.builtins.objects.cext.capi.PythonNativeWrapper;
 import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.HandlePointerConverter;
 import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.PythonObjectReference;
-import com.oracle.graal.python.builtins.objects.cext.capi.transitions.GetNativeWrapperNode;
-import com.oracle.graal.python.builtins.objects.cext.common.CArrayWrappers;
 import com.oracle.graal.python.builtins.objects.cext.copying.NativeLibraryLocator;
+import com.oracle.graal.python.builtins.objects.cext.structs.CFields;
+import com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess;
 import com.oracle.graal.python.builtins.objects.code.CodeNodes;
 import com.oracle.graal.python.builtins.objects.code.PCode;
 import com.oracle.graal.python.builtins.objects.common.DynamicObjectStorage;
@@ -123,14 +132,15 @@ import com.oracle.graal.python.builtins.objects.list.PList;
 import com.oracle.graal.python.builtins.objects.method.PBuiltinMethod;
 import com.oracle.graal.python.builtins.objects.method.PMethod;
 import com.oracle.graal.python.builtins.objects.module.PythonModule;
-import com.oracle.graal.python.builtins.objects.object.ObjectBuiltins;
 import com.oracle.graal.python.builtins.objects.object.PythonObject;
 import com.oracle.graal.python.builtins.objects.set.PSet;
 import com.oracle.graal.python.builtins.objects.str.StringUtils;
 import com.oracle.graal.python.builtins.objects.tuple.PTuple;
 import com.oracle.graal.python.lib.OsEnvironGetNode;
+import com.oracle.graal.python.lib.PyNumberLongNode;
 import com.oracle.graal.python.lib.PyObjectCallMethodObjArgs;
 import com.oracle.graal.python.lib.PyObjectGetItem;
+import com.oracle.graal.python.lib.PyObjectStrAsTruffleStringNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PConstructAndRaiseNode;
 import com.oracle.graal.python.nodes.PRaiseNode;
@@ -151,8 +161,12 @@ import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProv
 import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.nodes.object.GetOrCreateDictNode;
 import com.oracle.graal.python.nodes.statement.AbstractImportNode;
+import com.oracle.graal.python.nodes.util.CannotCastException;
+import com.oracle.graal.python.nodes.util.CastToJavaLongLossyNode;
+import com.oracle.graal.python.nodes.util.CastToJavaStringNode;
 import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
 import com.oracle.graal.python.nodes.util.ToNativePrimitiveStorageNode;
+import com.oracle.graal.python.pegparser.InputType;
 import com.oracle.graal.python.runtime.ExecutionContext;
 import com.oracle.graal.python.runtime.ExecutionContext.BoundaryCallContext;
 import com.oracle.graal.python.runtime.ExecutionContext.InteropCallContext;
@@ -203,6 +217,7 @@ import com.oracle.truffle.api.nodes.NodeUtil;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.api.strings.TruffleString;
+import com.oracle.truffle.api.strings.TruffleString.Encoding;
 
 @CoreFunctions(defineModule = J___GRAALPYTHON__, isEager = true)
 public final class GraalPythonModuleBuiltins extends PythonBuiltins {
@@ -225,7 +240,11 @@ public final class GraalPythonModuleBuiltins extends PythonBuiltins {
         addBuiltinConstant("is_native", TruffleOptions.AOT);
         addBuiltinConstant("is_bytecode_dsl_interpreter", PythonOptions.ENABLE_BYTECODE_DSL_INTERPRETER);
         PythonContext ctx = core.getContext();
-        TruffleString encodingOpt = ctx.getLanguage().getEngineOption(PythonOptions.StandardStreamEncoding);
+        PythonLanguage language = ctx.getLanguage();
+        // Engine options: if they differ from the values baked into the pre-initialized context,
+        // this `initialize` method is run again.
+        addBuiltinConstant("is_forced_uncached_interpreter", language.getEngineOption(PythonOptions.ForceUncachedInterpreter));
+        TruffleString encodingOpt = language.getEngineOption(PythonOptions.StandardStreamEncoding);
         TruffleString standardStreamEncoding = null;
         TruffleString standardStreamError = null;
         if (encodingOpt != null && !encodingOpt.isEmpty()) {
@@ -278,6 +297,7 @@ public final class GraalPythonModuleBuiltins extends PythonBuiltins {
 
         if (!context.getOption(PythonOptions.EnableDebuggingBuiltins)) {
             mod.setAttribute(tsLiteral("dump_truffle_ast"), PNone.NO_VALUE);
+            mod.setAttribute(tsLiteral("compiler_bailout_for_tests"), PNone.NO_VALUE);
             mod.setAttribute(tsLiteral("tdebug"), PNone.NO_VALUE);
             mod.setAttribute(tsLiteral("set_storage_strategy"), PNone.NO_VALUE);
             mod.setAttribute(tsLiteral("get_storage_strategy"), PNone.NO_VALUE);
@@ -286,14 +306,30 @@ public final class GraalPythonModuleBuiltins extends PythonBuiltins {
             mod.setAttribute(tsLiteral("is_native_object"), PNone.NO_VALUE);
             mod.setAttribute(tsLiteral("get_handle_table_id"), PNone.NO_VALUE);
             mod.setAttribute(tsLiteral("is_strong_handle_table_ref"), PNone.NO_VALUE);
+            mod.setAttribute(tsLiteral("has_id_reference"), PNone.NO_VALUE);
             mod.setAttribute(tsLiteral("clear_interop_type_registry"), PNone.NO_VALUE);
             mod.setAttribute(tsLiteral("foreign_number_list"), PNone.NO_VALUE);
             mod.setAttribute(tsLiteral("foreign_wrapper"), PNone.NO_VALUE);
         } else {
-            addBuiltinConstant("using_native_primitive_storage_strategy", context.getLanguage().getEngineOption(PythonOptions.UseNativePrimitiveStorageStrategy));
+            mod.setAttribute(tsLiteral("interop_has_gil"), new InteropGilTester());
         }
+        addBuiltinConstant("using_native_primitive_storage_strategy", context.getLanguage().getEngineOption(PythonOptions.UseNativePrimitiveStorageStrategy));
         if (PythonImageBuildOptions.WITHOUT_PLATFORM_ACCESS || !context.getOption(PythonOptions.RunViaLauncher)) {
             mod.setAttribute(tsLiteral("list_files"), PNone.NO_VALUE);
+        }
+    }
+
+    @ExportLibrary(InteropLibrary.class)
+    static class InteropGilTester implements TruffleObject {
+        @ExportMessage
+        boolean isExecutable() {
+            return true;
+        }
+
+        @ExportMessage
+        Object execute(Object[] args,
+                        @Bind Node inliningTarget) {
+            return PythonContext.get(inliningTarget).ownsGil();
         }
     }
 
@@ -368,7 +404,8 @@ public final class GraalPythonModuleBuiltins extends PythonBuiltins {
                     TruffleFile file = context.getPublicTruffleFileRelaxed(inputFilePath);
                     builder = Source.newBuilder(PythonLanguage.ID, file);
                 }
-                source = builder.mimeType(PythonLanguage.getCompileMimeType(0, 0)).build();
+                builder = PythonLanguage.setPythonOptions(builder, InputType.FILE, 0, 0);
+                source = builder.build();
                 // TODO we should handle non-IO errors better
             } catch (IOException e) {
                 ErrorAndMessagePair error = OSErrorEnum.fromException(e, TruffleString.EqualNode.getUncached());
@@ -384,10 +421,12 @@ public final class GraalPythonModuleBuiltins extends PythonBuiltins {
             }
             PythonLanguage language = context.getLanguage();
             RootCallTarget callTarget = (RootCallTarget) context.getEnv().parsePublic(source);
+            PCode code = PFactory.createCode(language, callTarget);
             Object[] arguments = PArguments.create();
+            PArguments.setCodeObject(arguments, code);
             PythonModule mainModule = context.getMainModule();
             PDict mainDict = GetOrCreateDictNode.executeUncached(mainModule);
-            PArguments.setGlobals(arguments, mainModule);
+            PArguments.setGlobals(arguments, mainDict);
             PArguments.setSpecialArgument(arguments, mainDict);
             PArguments.setException(arguments, PException.NO_EXCEPTION);
             context.initializeMainModule(inputFilePath);
@@ -441,6 +480,111 @@ public final class GraalPythonModuleBuiltins extends PythonBuiltins {
         Object[] objectArr = new Object[arr.length];
         System.arraycopy(arr, 0, objectArr, 0, arr.length);
         return objectArr;
+    }
+
+    @Builtin(name = "load_bytecode_file", minNumOfPositionalArgs = 3)
+    @GenerateNodeFactory
+    abstract static class LoadBytecodeFileNode extends PythonBuiltinNode {
+
+        static final TruffleString T_CHECK_HASH_BASED_PYCS = tsLiteral("check_hash_based_pycs");
+        static final TruffleString T__BOOTSTRAP = tsLiteral("_bootstrap");
+        public static final TruffleString T__VERBOSE_MESSAGE = tsLiteral("_verbose_message");
+        public static final TruffleString MESSAGE = tsLiteral("'{} matches {}'");
+
+        @Specialization
+        static Object doit(VirtualFrame frame, Object bytecodePath, Object sourcePath, Object statResult,
+                        @Bind Node inliningTarget,
+                        @Bind PythonContext context,
+                        @Cached("createFor($node)") BoundaryCallData boundaryCallData) {
+            Object savedState = BoundaryCallContext.enter(frame, boundaryCallData);
+            try {
+                return doLoadBytecodeFile(bytecodePath, sourcePath, statResult, inliningTarget, context);
+            } finally {
+                BoundaryCallContext.exit(frame, boundaryCallData, savedState);
+            }
+        }
+
+        @TruffleBoundary
+        private static Object doLoadBytecodeFile(Object bytecodePath, Object sourcePath, Object statResult, Node inliningTarget, PythonContext context) {
+            /*
+             * This builtin is used to load a bytecode file (.pyc) in a way that we can trust that
+             * it really comes from that file. It enables unloading serialized DSL bytecode from
+             * memory, so that it can be reparsed later from the same file. It also provides the
+             * cache key for CallTarget cache in multicontext mode.
+             */
+            try {
+                // get_data
+                TruffleString strBytecodePath = PyObjectStrAsTruffleStringNode.executeUncached(bytecodePath);
+                TruffleFile bytecodeFile = context.getPublicTruffleFileRelaxed(strBytecodePath);
+                byte[] bytes = bytecodeFile.readAllBytes();
+                // _classify_pyc
+                if (bytes.length < 16 || !Arrays.equals(bytes, 0, 4, MAGIC_NUMBER_BYTES, 0, 4)) {
+                    return PNone.NONE;
+                }
+                int flags = ARRAY_ACCESSOR_LE.getInt(bytes, 4);
+                if ((flags & ~0b11) != 0) {
+                    return PNone.NONE;
+                }
+                long cacheKey;
+                boolean hashBased = (flags & 0b1) != 0;
+                // Note that mtime-based validation is the default, hashing is opt-in
+                if (hashBased) {
+                    boolean checkSource = (flags & 0b10) != 0;
+                    cacheKey = ARRAY_ACCESSOR_LE.getLong(bytes, 16);
+                    String checkHashBasedPycs = "";
+                    try {
+                        checkHashBasedPycs = CastToJavaStringNode.getUncached().execute(context.lookupBuiltinModule(T__IMP).getAttribute(T_CHECK_HASH_BASED_PYCS));
+                    } catch (CannotCastException e) {
+                        // ignore
+                    }
+                    if (!checkHashBasedPycs.equals("never") && (checkSource || checkHashBasedPycs.equals("always"))) {
+                        // get_data
+                        TruffleString strSourcePath = PyObjectStrAsTruffleStringNode.executeUncached(sourcePath);
+                        TruffleFile sourceFile = context.getEnv().getPublicTruffleFile(strSourcePath.toJavaStringUncached());
+                        byte[] sourceBytes = sourceFile.readAllBytes();
+                        long sourceHash = ARRAY_ACCESSOR_LE.getLong(ImpModuleBuiltins.SourceHashNode.hashSource(MAGIC_NUMBER, sourceBytes, sourceBytes.length), 0);
+                        // _validate_hash_pyc
+                        if (cacheKey != sourceHash) {
+                            return PNone.NONE;
+                        }
+                    }
+                } else {
+                    // _validate_timestamp_pyc
+                    Object mTimeObj = PyNumberLongNode.executeUncached(PyObjectGetItem.executeUncached(statResult, T_MTIME));
+                    long mTime = CastToJavaLongLossyNode.executeUncached(mTimeObj);
+                    if (Integer.toUnsignedLong(ARRAY_ACCESSOR_LE.getInt(bytes, 8)) != mTime) {
+                        return PNone.NONE;
+                    }
+                    Object sizeObj = PyObjectGetItem.executeUncached(statResult, T_SIZE);
+                    if (sizeObj != PNone.NONE) {
+                        long size = CastToJavaLongLossyNode.executeUncached(sizeObj);
+                        if (Integer.toUnsignedLong(ARRAY_ACCESSOR_LE.getInt(bytes, 12)) != size) {
+                            return PNone.NONE;
+                        }
+                    }
+                    cacheKey = ARRAY_ACCESSOR_LE.getLong(bytes, 8);
+                }
+                if (context.getOption(PythonOptions.VerboseFlag)) {
+                    Object message = PyObjectCallMethodObjArgs.executeUncached(MESSAGE, T_FORMAT, bytecodePath, sourcePath);
+                    CallNode.executeUncached(context.lookupBuiltinModule(T__BOOTSTRAP).getAttribute(T__VERBOSE_MESSAGE), message);
+                }
+                TruffleFile sourceFile = null;
+                if (sourcePath != PNone.NONE) {
+                    try {
+                        TruffleString strSourcePath = PyObjectStrAsTruffleStringNode.executeUncached(sourcePath);
+                        sourceFile = context.getPublicTruffleFileRelaxed(strSourcePath);
+                    } catch (SecurityException | UnsupportedOperationException | IllegalArgumentException ignored) {
+                        // Fall back to Marshal's empty source.
+                    }
+                }
+                return MarshalModuleBuiltins.fromBytecodeFile(context.getLanguage(), bytecodeFile, sourceFile, bytes, 16, bytes.length - 16, cacheKey);
+            } catch (MarshalModuleBuiltins.Marshal.MarshalError me) {
+                throw PRaiseNode.raiseStatic(inliningTarget, me.type, me.message, me.arguments);
+            } catch (IOException | SecurityException | UnsupportedOperationException | IllegalArgumentException e) {
+                LOGGER.fine(() -> PythonUtils.formatJString("Failed to load bytecode file using load_bytecode_file: %s", e));
+                return PNone.NONE;
+            }
+        }
     }
 
     @Builtin(name = "read_file", minNumOfPositionalArgs = 1)
@@ -522,21 +666,35 @@ public final class GraalPythonModuleBuiltins extends PythonBuiltins {
         }
     }
 
+    @Builtin(name = "compiler_bailout_for_tests", minNumOfPositionalArgs = 0)
+    @GenerateNodeFactory
+    public abstract static class CompilerBailoutForTests extends PythonBuiltinNode {
+        @Specialization
+        Object doIt() {
+            CompilerDirectives.bailout("test bailout requested by compiler_bailout_for_tests");
+            return PNone.NONE;
+        }
+    }
+
     @Builtin(name = "tdebug", takesVarArgs = true)
     @GenerateNodeFactory
     public abstract static class DebugNode extends PythonBuiltinNode {
 
         public abstract Object execute(Object[] args);
 
-        @Specialization
         @TruffleBoundary
-        public Object doIt(Object[] args) {
-            PrintWriter stdout = new PrintWriter(getContext().getStandardOut());
+        public static Object tdebug(PythonContext context, Object[] args) {
+            PrintWriter stdout = new PrintWriter(context.getStandardOut());
             for (int i = 0; i < args.length; i++) {
                 stdout.println(args[i]);
             }
             stdout.flush();
             return PNone.NONE;
+        }
+
+        @Specialization
+        public Object doIt(Object[] args) {
+            return tdebug(getContext(), args);
         }
 
         @NeverDefault
@@ -703,16 +861,6 @@ public final class GraalPythonModuleBuiltins extends PythonBuiltins {
         }
     }
 
-    @Builtin(name = "force_split_direct_calls", minNumOfPositionalArgs = 1)
-    @GenerateNodeFactory
-    public abstract static class ForceSplitDirectCallsNode extends PythonUnaryBuiltinNode {
-        @Specialization
-        public Object doIt(PFunction func) {
-            func.setForceSplitDirectCalls(true);
-            return func;
-        }
-    }
-
     @Builtin(name = "determine_system_toolchain", maxNumOfPositionalArgs = 1)
     @GenerateNodeFactory
     public abstract static class DetermineSystemToolchain extends PythonUnaryBuiltinNode {
@@ -819,6 +967,15 @@ public final class GraalPythonModuleBuiltins extends PythonBuiltins {
         }
     }
 
+    @Builtin(name = "pyexpat_module_backend", minNumOfPositionalArgs = 0)
+    @GenerateNodeFactory
+    public abstract static class PyExpatModuleBackendNode extends PythonBuiltinNode {
+        @Specialization
+        TruffleString pyexpatModuleBackend() {
+            return getContext().lookupBuiltinModule(T_PYEXPAT) == null ? T_NATIVE : T_JAVA;
+        }
+    }
+
     @Builtin(name = "time_millis", minNumOfPositionalArgs = 0, maxNumOfPositionalArgs = 1, doc = "Like time.time() but in milliseconds resolution.")
     @GenerateNodeFactory
     public abstract static class TimeMillis extends PythonUnaryBuiltinNode {
@@ -920,20 +1077,19 @@ public final class GraalPythonModuleBuiltins extends PythonBuiltins {
                 throw raiseNode.raise(inliningTarget, SystemError, ErrorMessages.CANT_EXTEND_JAVA_CLASS_NOT_JVM);
             }
 
-            Env env = PythonContext.get(inliningTarget).getEnv();
-            if (!isType(value, env, lib)) {
+            if (!isType(value, lib)) {
                 throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.CANT_EXTEND_JAVA_CLASS_NOT_TYPE, value);
             }
 
             try {
-                return env.createHostAdapter(new Object[]{value});
+                return PythonContext.get(inliningTarget).getEnv().createHostAdapter(new Object[]{value});
             } catch (Exception ex) {
                 throw raiseNode.raise(inliningTarget, TypeError, PythonUtils.getMessage(ex), ex);
             }
         }
 
-        protected static boolean isType(Object obj, Env env, InteropLibrary lib) {
-            return env.isHostObject(obj) && (env.isHostSymbol(obj) || lib.isMetaObject(obj));
+        protected static boolean isType(Object obj, InteropLibrary lib) {
+            return lib.isHostObject(obj) && lib.isMetaObject(obj);
         }
 
     }
@@ -1093,12 +1249,11 @@ public final class GraalPythonModuleBuiltins extends PythonBuiltins {
             if (object instanceof PythonAbstractNativeObject) {
                 return -1;
             }
-            Object nativeWrapper = GetNativeWrapperNode.executeUncached(object);
-            if (nativeWrapper instanceof PythonNativeWrapper pn) {
-                return pn.ref.getHandleTableIndex();
-            } else {
-                return -1;
+            if (object instanceof PythonObject pythonObject) {
+                long untagged = HandlePointerConverter.pointerToStub(pythonObject.getNativePointer());
+                return CStructAccess.readIntField(untagged, CFields.GraalPyObject__handle_table_index);
             }
+            return -1;
         }
     }
 
@@ -1108,8 +1263,19 @@ public final class GraalPythonModuleBuiltins extends PythonBuiltins {
         @Specialization
         @TruffleBoundary
         static boolean doGeneric(int id) {
-            PythonObjectReference ref = CApiTransitions.nativeStubLookupGet(PythonContext.get(null).nativeContext, 0, id);
-            return ref != null && ref.isStrongReference();
+            Object ref = CApiTransitions.nativeStubLookupGet(PythonContext.get(null).handleContext, 0, id);
+            assert ref == null || ref instanceof PythonAbstractObject || ref instanceof PythonObjectReference;
+            return ref instanceof PythonAbstractObject || ref != null && ((PythonObjectReference) ref).isStrongReference();
+        }
+    }
+
+    @Builtin(name = "has_id_reference", minNumOfPositionalArgs = 1)
+    @GenerateNodeFactory
+    abstract static class HasIdReference extends PythonUnaryBuiltinNode {
+        @Specialization
+        @TruffleBoundary
+        static boolean doGeneric(Object object) {
+            return object instanceof PythonAbstractNativeObject nativeObject && nativeObject.ref != null;
         }
     }
 
@@ -1383,32 +1549,21 @@ public final class GraalPythonModuleBuiltins extends PythonBuiltins {
         @Specialization
         static PTuple doCreate(long arrowArrayAddr, long arrowSchemaAddr,
                         @Bind Node inliningTarget,
-                        @Cached PythonCextCapsuleBuiltins.PyCapsuleNewNode pyCapsuleNewNode) {
-            var ctx = getContext(inliningTarget);
+                        @Cached PythonCextCapsuleBuiltins.PyCapsuleNewNode pyCapsuleNewNode,
+                        @Cached TruffleString.AsNativeNode asNativeNode,
+                        @Cached TruffleString.GetInternalNativePointerNode getInternalNativePointerNode,
+                        @CachedLibrary(limit = "1") InteropLibrary lib) {
+            PythonContext ctx = getContext(inliningTarget);
+            long arrayDestructor = ctx.arrowSupport.getArrowArrayDestructor(inliningTarget);
+            TruffleString arrayCapsuleName = asNativeNode.execute(ArrowArray.CAPSULE_NAME, ctx::allocateContextMemory, Encoding.UTF_8, false, true);
+            long arrayCapsuleNamePointer = PythonUtils.coerceToLong(getInternalNativePointerNode.execute(arrayCapsuleName, Encoding.UTF_8), lib);
+            PyCapsule arrowArrayCapsule = pyCapsuleNewNode.execute(inliningTarget, arrowArrayAddr, arrayCapsuleNamePointer, arrayDestructor);
 
-            long arrayDestructor = ctx.arrowSupport.getArrowArrayDestructor();
-            var arrayCapsuleName = new CArrayWrappers.CByteArrayWrapper(ArrowArray.CAPSULE_NAME);
-            PyCapsule arrowArrayCapsule = pyCapsuleNewNode.execute(inliningTarget, arrowArrayAddr, arrayCapsuleName, arrayDestructor);
-
-            long schemaDestructor = ctx.arrowSupport.getArrowSchemaDestructor();
-            var schemaCapsuleName = new CArrayWrappers.CByteArrayWrapper(ArrowSchema.CAPSULE_NAME);
-            PyCapsule arrowSchemaCapsule = pyCapsuleNewNode.execute(inliningTarget, arrowSchemaAddr, schemaCapsuleName, schemaDestructor);
+            long schemaDestructor = ctx.arrowSupport.getArrowSchemaDestructor(inliningTarget);
+            TruffleString schemaCapsuleName = asNativeNode.execute(ArrowSchema.CAPSULE_NAME, ctx::allocateContextMemory, Encoding.UTF_8, false, true);
+            long schemaCapsuleNamePointer = PythonUtils.coerceToLong(getInternalNativePointerNode.execute(schemaCapsuleName, Encoding.UTF_8), lib);
+            PyCapsule arrowSchemaCapsule = pyCapsuleNewNode.execute(inliningTarget, arrowSchemaAddr, schemaCapsuleNamePointer, schemaDestructor);
             return PFactory.createTuple(ctx.getLanguage(inliningTarget), new Object[]{arrowSchemaCapsule, arrowArrayCapsule});
-        }
-    }
-
-    /**
-     * Used from datetime module to create new instances of objects that we allow subclassing from
-     * native. It's necessary, because the __new__ wrapper would reject native subclasses that
-     * override tp_new.
-     */
-    @Builtin(name = "unsafe_object_new", minNumOfPositionalArgs = 1)
-    @GenerateNodeFactory
-    abstract static class UnsafeObjectNewNode extends PythonUnaryBuiltinNode {
-        @Specialization
-        static Object create(VirtualFrame frame, Object cls,
-                        @Cached ObjectBuiltins.ObjectNode objectNode) {
-            return objectNode.execute(frame, cls, PythonUtils.EMPTY_OBJECT_ARRAY, PKeyword.EMPTY_KEYWORDS);
         }
     }
 }

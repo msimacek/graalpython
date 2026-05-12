@@ -1,4 +1,4 @@
-# Copyright (c) 2017, 2025, Oracle and/or its affiliates.
+# Copyright (c) 2017, 2026, Oracle and/or its affiliates.
 # Copyright (c) 2013, Regents of the University of California
 #
 # All rights reserved.
@@ -121,6 +121,9 @@ MICRO_BENCHMARKS = {
     'virtualize-in-try-catch-oom': ITER_10,
     'phase_shift_warmup_baseline': ITER_5 + ['--self-measurement'] + ['500'],
     'phase_shift_warmup': ITER_3 + ['--self-measurement'] + ['1600', '500'],
+    'jsonrpc-pipe': ITER_10 + ['500', 'text', 'text', 'mask', '64'],
+    'startup': ITER_5 + ['50'],
+    'startup-imports': ITER_5 + ['20'],
 }
 
 # For benchmarking the interpreter with --engine.Compilation=false
@@ -128,6 +131,9 @@ MICRO_BENCHMARKS_SMALL = {
     'nano-arith': ITER_6 + WARMUP_2,
     'nano-loop': ITER_6 + WARMUP_2,
     'nano-if': ITER_6 + WARMUP_2,
+    'nano-attribute': ITER_6 + WARMUP_2,
+    'nano-property': ITER_6 + WARMUP_2,
+    'jsonrpc-pipe': ITER_6 + WARMUP_2 + ['100', 'text', 'text', 'mask', '64'],
     'arith-modulo-sized': ITER_6 + WARMUP_2 + ['1'],
     'if-generic': ITER_10 + WARMUP_2 + ['500000'],
     'if-generic-non-builtin': ITER_10 + WARMUP_2 + ['500000'],
@@ -179,17 +185,24 @@ MICRO_BENCHMARKS_SMALL = {
     'unmarshal-pyc': ITER_5 + WARMUP_2 + ['50'],
     'c-member-access': ITER_5 + ['30'],
     'c-list-iterating-obj': ITER_5 + ['500000'],
+    'c-dict-iterating': ITER_5 + ['500000'],
     'c-magic-bool': ITER_5 + ['1000000'],
     'c-magic-iter': ITER_5 + ['500000'],
     'c-arith-binop': ITER_5 + ['3'],
     'c-arith-binop2': ITER_5 + ['5'],
     'c-call-classmethod': ITER_5 + ['200000'],
-    'c-issubtype-polymorphic-forced-to-native': ITER_5 + ['100000'],
     'c-issubtype-polymorphic': ITER_5 + ['100000'],
     'c-issubtype-monorphic': ITER_5 + ['200000'],
     'c-call-method': ITER_5 + ['50000'],
+    'c-call-method-o': ITER_5 + ['50000'],
+    'c-call-method-noargs': ITER_5 + ['50000'],
+    'c-call-method-varargs': ITER_5 + ['50000'],
     'c-call-method-int-float': ITER_5 + ['500000'],
+    'regexp': ITER_5 + WARMUP_2,
+    'c-upcall': ITER_5 + [str(2**28)],
+    'c-to-c': ITER_5 + [str(2**31 - 1)],
     'startup': ITER_5 + ['50'],
+    'startup-imports': ITER_5 + ['10'],
 }
 
 def _pickling_benchmarks(module='pickle'):
@@ -209,17 +222,26 @@ def _pickling_benchmarks(module='pickle'):
 MICRO_NATIVE_BENCHMARKS = {
     'c-member-access': ITER_5 + ['10000'],
     'c-list-iterating-obj': ITER_5 + ['50000000'],
+    'c-dict-iterating': ITER_5 + ['50000000'],
     'c-magic-bool': ITER_5 + ['100000000'],
     'c-magic-iter': ITER_5 + ['50000000'],
     'c-arith-binop': ITER_5 + ['1000'],
     'c-arith-binop2': ITER_5 + ['100'],
     'c-call-classmethod': ITER_5 + ['50000000'],
-    'c-issubtype-polymorphic-forced-to-native': ITER_5 + ['50000000'],
     'c-issubtype-polymorphic': ITER_5 + ['50000000'],
     'c-issubtype-monorphic': ITER_5 + ['50000000'],
     'c-call-method': ITER_5 + ['5000000'],
+    'c-call-method-o': ITER_5 + ['5000000'],
+    'c-call-method-noargs': ITER_5 + ['5000000'],
+    'c-call-method-varargs': ITER_5 + ['5000000'],
+    'c-call-method-fastcall': ITER_5 + ['5000000'],
     'c-call-method-int-float': ITER_5 + ['5000000'],
+    'c-call-method-obj-args': ITER_5 + ['5000000'],
     'c-instantiate-large': ITER_5 + ['1000'],
+    'c-upcall': ITER_5 + [str(2**28)],
+    'c-upcall-builtin-function': ITER_5 + [str(2**26)],
+    'c-upcall-slot': ITER_5 + [str(2**20)],
+    'c-to-c': ITER_5 + [str(2**31 - 1)],
 }
 
 
@@ -257,6 +279,7 @@ MESO_BENCHMARKS = {
     'regexdna-sized2': ITER_25 + ['4'],
     'knucleotide': ITER_25 + [],
     'chaos-sized2': ITER_10 + ['500'],
+    'chaos-traced': ITER_5 + ['500'],
     'go-sized2': ITER_15 + ['50'],
     'raytrace-simple': ITER_10 + [],
     'lud-sized2': ITER_10 + ['1536'],
@@ -281,6 +304,8 @@ MESO_BENCHMARKS_SMALL = {
 
 MACRO_BENCHMARKS = {
     'gcbench': ITER_10 + ['10'],
+    'c-pydantic-validate': ITER_10 + ['200000'],
+    'c-pymupdf-parse': ITER_10 + ['1'],
 }
 
 
@@ -361,6 +386,7 @@ HEAP_BENCHMARKS = {
         "post-startup": [],
         "import-a-lot": [],
         "allocate-objects": [],
+        "allocate-dicts": [],
     }],
     "micro-small-heap": [PATH_MICRO, MICRO_BENCHMARKS_SMALL],
 }

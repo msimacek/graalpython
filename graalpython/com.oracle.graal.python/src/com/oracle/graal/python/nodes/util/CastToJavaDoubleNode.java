@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,12 +41,13 @@
 package com.oracle.graal.python.nodes.util;
 
 import static com.oracle.graal.python.builtins.objects.cext.structs.CFields.PyFloatObject__ob_fval;
+import static com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.readDoubleField;
 
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.modules.MathGuards;
 import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
-import com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess;
 import com.oracle.graal.python.builtins.objects.ints.PInt;
+import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.classes.IsSubtypeNode;
 import com.oracle.graal.python.nodes.object.GetClassNode.GetPythonObjectClassNode;
@@ -78,6 +79,10 @@ import com.oracle.truffle.api.strings.TruffleString;
 public abstract class CastToJavaDoubleNode extends PNodeWithContext {
 
     public abstract double execute(Node inliningTarget, Object x);
+
+    public static double executeUncached(Object x) {
+        return CastToJavaDoubleNodeGen.getUncached().execute(null, x);
+    }
 
     @Specialization
     static double toDouble(double x) {
@@ -118,10 +123,9 @@ public abstract class CastToJavaDoubleNode extends PNodeWithContext {
     @InliningCutoff
     static double doNativeObject(Node inliningTarget, PythonAbstractNativeObject x,
                     @Cached GetPythonObjectClassNode getClassNode,
-                    @Cached(inline = false) IsSubtypeNode isSubtypeNode,
-                    @Cached(inline = false) CStructAccess.ReadDoubleNode read) {
+                    @Cached(inline = false) IsSubtypeNode isSubtypeNode) {
         if (isSubtypeNode.execute(getClassNode.execute(inliningTarget, x), PythonBuiltinClassType.PFloat)) {
-            return read.readFromObj(x, PyFloatObject__ob_fval);
+            return readDoubleField(x.getPtr(), PyFloatObject__ob_fval);
         }
         // the object's type is not a subclass of 'float'
         throw CannotCastException.INSTANCE;
@@ -145,7 +149,11 @@ public abstract class CastToJavaDoubleNode extends PNodeWithContext {
         return null;
     }
 
-    @Specialization(guards = "!isNumber(obj)")
+    static boolean isInteropObject(Object obj) {
+        return !PGuards.isNumber(obj) && !(obj instanceof PythonAbstractNativeObject);
+    }
+
+    @Specialization(guards = "isInteropObject(obj)")
     @InliningCutoff
     static double doGeneric(Object obj,
                     @CachedLibrary(limit = "3") InteropLibrary interopLibrary) {

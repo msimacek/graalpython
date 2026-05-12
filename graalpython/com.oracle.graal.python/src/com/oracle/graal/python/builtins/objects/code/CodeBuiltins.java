@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2014, Regents of the University of California
  *
  * All rights reserved.
@@ -287,8 +287,9 @@ public final class CodeBuiltins extends PythonBuiltins {
     public abstract static class GetCodeNode extends PythonUnaryBuiltinNode {
         @Specialization
         static Object get(PCode self,
+                        @Bind Node inliningTarget,
                         @Bind PythonLanguage language) {
-            return self.co_code(language);
+            return self.co_code(language, inliningTarget);
         }
     }
 
@@ -447,10 +448,17 @@ public final class CodeBuiltins extends PythonBuiltins {
 
             int startInstructionIndex = 0;
             int instructionIndex = 0;
+            boolean wasLastInstructionInstrumentation = false;
+            int lastTripleLine = -1;
             for (Instruction instruction : bytecodeNode.getInstructions()) {
                 if (instruction.getBytecodeIndex() == triple[1] /* end bci */) {
-                    result.add(PFactory.createTuple(language, new int[]{startInstructionIndex, instructionIndex, triple[2]}));
-                    startInstructionIndex = instructionIndex;
+                    if (lastTripleLine != triple[2]) {
+                        if (!wasLastInstructionInstrumentation) {
+                            result.add(PFactory.createTuple(language, new int[]{startInstructionIndex, instructionIndex, triple[2]}));
+                            lastTripleLine = triple[2];
+                        }
+                        startInstructionIndex = instructionIndex;
+                    }
                     triple = triples.get(++tripleIndex);
                     assert triple[0] == instruction.getBytecodeIndex() : "bytecode ranges should be consecutive";
                 }
@@ -458,11 +466,14 @@ public final class CodeBuiltins extends PythonBuiltins {
                 if (!instruction.isInstrumentation()) {
                     // Emulate CPython's fixed 2-word instructions.
                     instructionIndex += 2;
+                    wasLastInstructionInstrumentation = false;
+                } else {
+                    wasLastInstructionInstrumentation = true;
                 }
             }
 
             result.add(PFactory.createTuple(language, new int[]{startInstructionIndex, instructionIndex, triple[2]}));
-            assert tripleIndex == triples.size() : String.format("every bytecode range should have been converted to " +
+            assert tripleIndex == triples.size() - 1 : String.format("every bytecode range should have been converted to " +
                             "an instruction range, %d != %d, function: %s", tripleIndex, triples.size(), bytecodeNode.getRootNode());
 
             return result;
@@ -500,6 +511,8 @@ public final class CodeBuiltins extends PythonBuiltins {
                                             // 1-based inclusive to 0-based exclusive (-1 + 1 = 0)
                                             section.getEndColumn()
                             }));
+                        } else {
+                            lines.add(PFactory.createTuple(language, new Object[]{PNone.NONE, PNone.NONE, PNone.NONE, PNone.NONE}));
                         }
                     }
                 } else {
@@ -553,7 +566,7 @@ public final class CodeBuiltins extends PythonBuiltins {
                                 self.co_nlocals() != other.co_nlocals() || self.co_flags() != other.co_flags() || self.co_firstlineno() != other.co_firstlineno()) {
                     return op.isNe();
                 }
-                if (!Arrays.equals(self.getCodestring(), other.getCodestring())) {
+                if (!Arrays.equals(self.getCodestring(this), other.getCodestring(this))) {
                     return op.isNe();
                 }
                 // TODO compare co_const
@@ -582,7 +595,7 @@ public final class CodeBuiltins extends PythonBuiltins {
             long h, h0, h1, h2, h3, h4, h5, h6;
 
             h0 = hashNode.execute(frame, inliningTarget, self.co_name());
-            h1 = hashNode.execute(frame, inliningTarget, self.co_code(language));
+            h1 = hashNode.execute(frame, inliningTarget, self.co_code(language, inliningTarget));
             h2 = hashNode.execute(frame, inliningTarget, self.co_consts(language));
             h3 = hashNode.execute(frame, inliningTarget, self.co_names(language));
             h4 = hashNode.execute(frame, inliningTarget, self.co_varnames(language));
@@ -650,7 +663,7 @@ public final class CodeBuiltins extends PythonBuiltins {
                                 coNlocals == -1 ? self.co_nlocals() : coNlocals,
                                 coStacksize == -1 ? self.co_stacksize() : coStacksize,
                                 coFlags == -1 ? self.co_flags() : coFlags,
-                                PGuards.isNone(coCode) ? self.getCodestring() : bufferLib.getInternalOrCopiedByteArray(coCode),
+                                PGuards.isNone(coCode) ? self.getCodestring(inliningTarget) : bufferLib.getInternalOrCopiedByteArray(coCode),
                                 coConsts.length == 0 ? null : coConsts,
                                 coNames.length == 0 ? null : objectArrayToTruffleStringArray(inliningTarget, coNames, castToTruffleStringNode),
                                 coVarnames.length == 0 ? null : objectArrayToTruffleStringArray(inliningTarget, coVarnames, castToTruffleStringNode),

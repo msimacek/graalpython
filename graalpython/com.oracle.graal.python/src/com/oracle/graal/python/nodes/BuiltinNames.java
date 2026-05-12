@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -212,6 +212,7 @@ public abstract class BuiltinNames {
     public static final TruffleString T_STR = tsLiteral(J_STR);
 
     public static final String J_BOOL = "bool";
+    public static final TruffleString T_BOOL = tsLiteral(J_BOOL);
 
     public static final String J_EXEC = "exec";
     public static final TruffleString T_EXEC = StringLiterals.T_EXEC;
@@ -331,6 +332,7 @@ public abstract class BuiltinNames {
     public static final String J_MAX = "max";
 
     public static final String J_ROUND = "round";
+    public static final TruffleString T_ROUND = tsLiteral(J_ROUND);
 
     public static final String J_DELATTR = "delattr";
 
@@ -392,7 +394,11 @@ public abstract class BuiltinNames {
 
     public static final TruffleString T_SYS = tsLiteral("sys");
 
-    public static final TruffleString T__SIGNAL = tsLiteral("_signal");
+    public static final String J_SIGNAL = "signal";
+    public static final TruffleString T_SIGNAL = tsLiteral(J_SIGNAL);
+
+    public static final String J__SIGNAL = "_signal";
+    public static final TruffleString T__SIGNAL = tsLiteral(J__SIGNAL);
 
     public static final String J__WEAKREF = "_weakref";
     public static final TruffleString T__WEAKREF = tsLiteral(J__WEAKREF);
@@ -487,6 +493,9 @@ public abstract class BuiltinNames {
     public static final String J_HASHLIB = "_hashlib";
     public static final TruffleString T_HASHLIB = tsLiteral(J_HASHLIB);
 
+    public static final String J_PYEXPAT = "pyexpat";
+    public static final TruffleString T_PYEXPAT = tsLiteral(J_PYEXPAT);
+
     public static final String J_MD5 = "_md5";
 
     public static final String J_SHA1 = "_sha1";
@@ -529,4 +538,10 @@ public abstract class BuiltinNames {
 
     public static final String J_UNICODEDATA = "unicodedata";
     public static final TruffleString T_UNICODEDATA = tsLiteral(J_UNICODEDATA);
+
+    public static final TruffleString T_MTIME = tsLiteral("mtime");
+    public static final TruffleString T_SIZE = tsLiteral("size");
+
+    public static final TruffleString T__IMP = tsLiteral("_imp");
+    public static final TruffleString T_FLAGS = tsLiteral("flags");
 }

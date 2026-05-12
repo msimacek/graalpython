@@ -1,4 +1,4 @@
-/* Copyright (c) 2024, 2025, Oracle and/or its affiliates.
+/* Copyright (c) 2024, 2026, Oracle and/or its affiliates.
  * Copyright (C) 1996-2024 Python Software Foundation
  *
  * Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
@@ -31,7 +31,6 @@
 #include "capi.h"
 #include <trufflenfi.h>
 
-extern TruffleContext* TRUFFLE_CONTEXT;
 static THREAD_LOCAL int graalpy_attached_thread = 0;
 static THREAD_LOCAL int graalpy_gilstate_counter = 0;
 
@@ -84,9 +83,16 @@ static inline PyThreadState *
 _get_thread_state() {
     PyThreadState *ts = tstate_current;
     if (UNLIKELY(ts == NULL)) {
-         ts = GraalPyPrivate_ThreadState_Get(&tstate_current);
-         tstate_current = ts;
+        /*
+         * Very unlikely fallback: this can happen if another thread initializes the C API while
+         * the current thread is attached to Python but blocked and therefore misses eager
+         * initialization of its native 'tstate_current' TLS slot.
+         */
+        ts = GraalPyPrivate_ThreadState_Get(&tstate_current);
+        assert(ts != NULL);
+        tstate_current = ts;
     }
+    assert(ts != NULL);
     return ts;
 }
 
@@ -2283,22 +2289,22 @@ PyGILState_Check(void)
 
     return (tstate == gilstate_tss_get(runtime));
 #else // GraalPy change
-    int attached = 0;
     /*
      * PyGILState_Check is allowed to be called from a new thread that didn't yet setup the GIL.
-     * If we don't attach the thread ourselves, the upcall will work because NFI will attach
-     * the thread automatically, but it won't create the context which would then break
-     * subsequent PyGILState_Ensure.
+     * We must attach it before calling into Java so the upcall has an entered polyglot context.
      */
-    if (TRUFFLE_CONTEXT) {
-        if ((*TRUFFLE_CONTEXT)->getTruffleEnv(TRUFFLE_CONTEXT) == NULL) {
-            (*TRUFFLE_CONTEXT)->attachCurrentThread(TRUFFLE_CONTEXT);
-            attached = 1;
+    int attached = 0;
+    if (graalpy_attach_native_thread) {
+        attached = graalpy_attach_native_thread();
+        if (attached == GRAALPY_ATTACH_NATIVE_FAILED) {
+            return 0;
         }
+    } else {
+        return 0;
     }
     int ret = GraalPyPrivate_GILState_Check();
-    if (attached) {
-        (*TRUFFLE_CONTEXT)->detachCurrentThread(TRUFFLE_CONTEXT);
+    if (attached == GRAALPY_ATTACH_NATIVE_OWNED && graalpy_detach_native_thread) {
+        graalpy_detach_native_thread();
     }
     return ret;
 #endif // GraalPy change
@@ -2355,13 +2361,18 @@ PyGILState_Ensure(void)
 
     return has_gil ? PyGILState_LOCKED : PyGILState_UNLOCKED;
 #else // GraalPy change
-    if (TRUFFLE_CONTEXT) {
-        if ((*TRUFFLE_CONTEXT)->getTruffleEnv(TRUFFLE_CONTEXT) == NULL) {
-            (*TRUFFLE_CONTEXT)->attachCurrentThread(TRUFFLE_CONTEXT);
+    if (!graalpy_attach_native_thread) {
+        Py_FatalError("PyGILState_Ensure called before GraalPy C API initialization");
+    }
+    if (!graalpy_attached_thread) {
+        int attached = graalpy_attach_native_thread();
+        if (attached == GRAALPY_ATTACH_NATIVE_FAILED) {
+            Py_FatalError("Could not attach native thread to the polyglot context");
+        } else if (attached == GRAALPY_ATTACH_NATIVE_OWNED) {
             graalpy_attached_thread = 1;
         }
-        graalpy_gilstate_counter++;
     }
+    graalpy_gilstate_counter++;
     return GraalPyPrivate_GILState_Ensure() ? PyGILState_UNLOCKED : PyGILState_LOCKED;
 #endif // GraalPy change
 }
@@ -2421,20 +2432,20 @@ PyGILState_Release(PyGILState_STATE oldstate)
     if (oldstate == PyGILState_UNLOCKED) {
         GraalPyPrivate_GILState_Release();
     }
-    if (TRUFFLE_CONTEXT) {
-        graalpy_gilstate_counter--;
-        if (graalpy_gilstate_counter == 0 && graalpy_attached_thread) {
-            GraalPyPrivate_BeforeThreadDetach();
-            (*TRUFFLE_CONTEXT)->detachCurrentThread(TRUFFLE_CONTEXT);
-            graalpy_attached_thread = 0;
-            /*
-             * The thread state on the Java-side is cleared in GraalPyPrivate_BeforeThreadDetach.
-             * As part of that the tstate_current pointer should have been set to NULL to make
-             * sure to fetch a fresh pointer the next time we attach. Just to be sure, we clear
-             * it here too:
-             */
-            tstate_current = NULL;
+    graalpy_gilstate_counter--;
+    if (graalpy_gilstate_counter == 0 && graalpy_attached_thread) {
+        GraalPyPrivate_BeforeThreadDetach();
+        if (graalpy_detach_native_thread) {
+            graalpy_detach_native_thread();
         }
+        graalpy_attached_thread = 0;
+        /*
+         * The thread state on the Java-side is cleared in GraalPyPrivate_BeforeThreadDetach.
+         * As part of that the tstate_current pointer should have been set to NULL to make
+         * sure to fetch a fresh pointer the next time we attach. Just to be sure, we clear
+         * it here too:
+         */
+        tstate_current = NULL;
     }
 #endif // GraalPy change
 }

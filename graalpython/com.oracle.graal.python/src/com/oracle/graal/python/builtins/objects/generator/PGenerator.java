@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -42,7 +42,6 @@ import com.oracle.graal.python.nodes.bytecode.PBytecodeRootNode;
 import com.oracle.graal.python.nodes.bytecode_dsl.BytecodeDSLFrameInfo;
 import com.oracle.graal.python.nodes.bytecode_dsl.PBytecodeDSLRootNode;
 import com.oracle.graal.python.runtime.PythonOptions;
-import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.RootCallTarget;
@@ -53,9 +52,7 @@ import com.oracle.truffle.api.bytecode.ContinuationResult;
 import com.oracle.truffle.api.bytecode.ContinuationRootNode;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.MaterializedFrame;
-import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
-import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 import com.oracle.truffle.api.strings.TruffleString;
 
 public class PGenerator extends PythonBuiltinObject {
@@ -84,6 +81,11 @@ public class PGenerator extends PythonBuiltinObject {
          * Each AST can then specialize towards which nodes are executed when starting from that
          * particular entry point. When yielding, the next index to the next call target to continue
          * from is updated via {@link #handleResult}.
+         * <p>
+         * The owner of this array is really the
+         * {@link com.oracle.graal.python.nodes.bytecode.PBytecodeGeneratorFunctionRootNode}. Every
+         * {@link PGenerator} instance representing the same generator on AST level gets reference
+         * to the same array with call targets.
          */
         @CompilationFinal(dimensions = 1) private final RootCallTarget[] callTargets;
         private int currentCallTarget;
@@ -116,7 +118,7 @@ public class PGenerator extends PythonBuiltinObject {
     public static class BytecodeDSLState {
         private final PBytecodeDSLRootNode rootNode;
         private final Object[] arguments;
-        private BytecodeLocation lastLocation;
+        private ContinuationRootNode prevContinuationRootNode;
         private ContinuationRootNode continuationRootNode;
         private boolean isStarted;
 
@@ -127,9 +129,11 @@ public class PGenerator extends PythonBuiltinObject {
         }
 
         public Object handleResult(PGenerator generator, ContinuationResult result) {
-            assert result.getContinuationRootNode() == null || result.getContinuationRootNode().getFrameDescriptor() == generator.frame.getFrameDescriptor();
+            assert PBytecodeDSLRootNode.cast(result.getContinuationRootNode()).getFrameDescriptor() == generator.frame.getFrameDescriptor();
             isStarted = true;
-            lastLocation = continuationRootNode.getLocation();
+            // We must keep the previous root so that we can load its BytecodeNode to resolve BCI to
+            // location, the next continuation node may have different BytecodeNode
+            prevContinuationRootNode = continuationRootNode;
             continuationRootNode = result.getContinuationRootNode();
             return result.getResult();
         }
@@ -191,11 +195,17 @@ public class PGenerator extends PythonBuiltinObject {
         }
     }
 
-    public void prepareResume() {
+    public Object[] prepareResume() {
         assert PythonOptions.ENABLE_BYTECODE_DSL_INTERPRETER; // not needed for manual interpreter
-        Object[] frame = getGeneratorFrame().getArguments();
-        PArguments.setException(frame, null);
-        PArguments.setCallerFrameInfo(frame, null);
+        Object[] arguments = getGeneratorFrame().getArguments();
+        PArguments.setException(arguments, null);
+        PArguments.setCallerFrameInfo(arguments, null);
+        return arguments;
+    }
+
+    public ContinuationRootNode getBytecodeDSLContinuationRootNode() {
+        assert PythonOptions.ENABLE_BYTECODE_DSL_INTERPRETER;
+        return getBytecodeDSLState().continuationRootNode;
     }
 
     /**
@@ -267,6 +277,10 @@ public class PGenerator extends PythonBuiltinObject {
         return globals;
     }
 
+    public PFunction getGeneratorFunction() {
+        return generatorFunction;
+    }
+
     public static Object getSendValue(Object[] arguments) {
         return PArguments.getArgument(arguments, 1);
     }
@@ -290,17 +304,37 @@ public class PGenerator extends PythonBuiltinObject {
         }
     }
 
-    /**
-     * Return the BytecodeNode that should be used for accessing the frame
-     */
     public BytecodeNode getBytecodeNode() {
         assert PythonOptions.ENABLE_BYTECODE_DSL_INTERPRETER;
+        assert !running; // When it is running, we must use stack walking to get the location
         BytecodeDSLState state = getBytecodeDSLState();
-        if (state.lastLocation != null) {
-            return state.lastLocation.getBytecodeNode();
+        if (state.isStarted) {
+            return state.prevContinuationRootNode.getLocation().getBytecodeNode();
         } else {
             return state.rootNode.getBytecodeNode();
         }
+    }
+
+    /**
+     * Return the BytecodeNode that should be used for accessing the frame of a continuation root
+     * node.
+     */
+    public BytecodeNode getContinuationBytecodeNode() {
+        assert PythonOptions.ENABLE_BYTECODE_DSL_INTERPRETER;
+        BytecodeDSLState state = getBytecodeDSLState();
+        assert state.isStarted;
+        return state.continuationRootNode.getLocation().getBytecodeNode();
+    }
+
+    /**
+     * Loads the BytecodeNode from the RootNode field, which is in general not correct, but can be
+     * used if we know that the generator function is currently not on stack.
+     */
+    public BytecodeNode getGeneratorFunctionBytecodeNode() {
+        assert PythonOptions.ENABLE_BYTECODE_DSL_INTERPRETER;
+        BytecodeDSLState state = getBytecodeDSLState();
+        assert !state.isStarted;
+        return state.rootNode.getBytecodeNode();
     }
 
     public BytecodeLocation getCurrentLocation() {
@@ -315,12 +349,12 @@ public class PGenerator extends PythonBuiltinObject {
 
         if (PythonOptions.ENABLE_BYTECODE_DSL_INTERPRETER) {
             PBytecodeDSLRootNode rootNode = getBytecodeDSLState().rootNode;
-            if (rootNode.yieldFromGeneratorIndex == -1 || !getBytecodeDSLState().isStarted) {
+            if (!rootNode.hasYieldFromGenerator() || !getBytecodeDSLState().isStarted) {
                 return null;
             }
-            return getBytecodeNode().getLocalValue(0, getGeneratorFrame(), rootNode.yieldFromGeneratorIndex);
+            return rootNode.readYieldFromGenerator(getContinuationBytecodeNode(), getGeneratorFrame());
         } else {
-            return frameInfo.getYieldFrom(frame, getBci(), getBytecodeState().getCurrentRootNode().getResumeStackTop());
+            return ((BytecodeFrameInfo) frameInfo).getYieldFrom(frame, getBci(), getBytecodeState().getCurrentRootNode().getResumeStackTop());
         }
 
     }
@@ -352,14 +386,6 @@ public class PGenerator extends PythonBuiltinObject {
     @Override
     public final String toString() {
         return "<generator object " + name + " at " + hashCode() + ">";
-    }
-
-    public final PCode getOrCreateCode(Node inliningTarget, InlinedConditionProfile hasCodeProfile) {
-        if (hasCodeProfile.profile(inliningTarget, code == null)) {
-            RootCallTarget callTarget = getRootNode().getCallTarget();
-            code = PFactory.createCode(PythonLanguage.get(inliningTarget), callTarget);
-        }
-        return code;
     }
 
     public final boolean isRunning() {

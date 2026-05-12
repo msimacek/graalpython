@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -51,6 +51,7 @@ import static com.oracle.graal.python.nodes.BuiltinNames.J_PARTIAL;
 import static com.oracle.graal.python.nodes.BuiltinNames.J_POLYGLOT;
 import static com.oracle.graal.python.nodes.BuiltinNames.J_POSIX;
 import static com.oracle.graal.python.nodes.BuiltinNames.J_PROPERTY;
+import static com.oracle.graal.python.nodes.BuiltinNames.J_SIGNAL;
 import static com.oracle.graal.python.nodes.BuiltinNames.J_SHA1;
 import static com.oracle.graal.python.nodes.BuiltinNames.J_SHA2;
 import static com.oracle.graal.python.nodes.BuiltinNames.J_SHA3;
@@ -63,6 +64,7 @@ import static com.oracle.graal.python.nodes.BuiltinNames.J_TYPE_VAR_TUPLE;
 import static com.oracle.graal.python.nodes.BuiltinNames.J_TYPING;
 import static com.oracle.graal.python.nodes.BuiltinNames.J_WRAPPER_DESCRIPTOR;
 import static com.oracle.graal.python.nodes.BuiltinNames.J__CONTEXTVARS;
+import static com.oracle.graal.python.nodes.BuiltinNames.J__SIGNAL;
 import static com.oracle.graal.python.nodes.BuiltinNames.J__SOCKET;
 import static com.oracle.graal.python.nodes.BuiltinNames.J__SSL;
 import static com.oracle.graal.python.nodes.BuiltinNames.J__STRUCT;
@@ -129,6 +131,10 @@ import com.oracle.graal.python.builtins.modules.pickle.PicklerBuiltins;
 import com.oracle.graal.python.builtins.modules.pickle.PicklerMemoProxyBuiltins;
 import com.oracle.graal.python.builtins.modules.pickle.UnpicklerBuiltins;
 import com.oracle.graal.python.builtins.modules.pickle.UnpicklerMemoProxyBuiltins;
+import com.oracle.graal.python.builtins.modules.pyexpat.XMLParserBuiltins;
+import com.oracle.graal.python.builtins.modules.re.MatchBuiltins;
+import com.oracle.graal.python.builtins.modules.re.PatternBuiltins;
+import com.oracle.graal.python.builtins.modules.weakref.ProxyTypeBuiltins;
 import com.oracle.graal.python.builtins.modules.zlib.ZlibDecompressorBuiltins;
 import com.oracle.graal.python.builtins.objects.NoneBuiltins;
 import com.oracle.graal.python.builtins.objects.NotImplementedBuiltins;
@@ -165,6 +171,7 @@ import com.oracle.graal.python.builtins.objects.exception.BaseExceptionBuiltins;
 import com.oracle.graal.python.builtins.objects.exception.BaseExceptionGroupBuiltins;
 import com.oracle.graal.python.builtins.objects.exception.ImportErrorBuiltins;
 import com.oracle.graal.python.builtins.objects.exception.KeyErrorBuiltins;
+import com.oracle.graal.python.builtins.objects.exception.NameErrorBuiltins;
 import com.oracle.graal.python.builtins.objects.exception.OsErrorBuiltins;
 import com.oracle.graal.python.builtins.objects.exception.StopIterationBuiltins;
 import com.oracle.graal.python.builtins.objects.exception.SyntaxErrorBuiltins;
@@ -181,6 +188,7 @@ import com.oracle.graal.python.builtins.objects.foreign.ForeignInstantiableBuilt
 import com.oracle.graal.python.builtins.objects.foreign.ForeignIterableBuiltins;
 import com.oracle.graal.python.builtins.objects.foreign.ForeignNumberBuiltins;
 import com.oracle.graal.python.builtins.objects.foreign.ForeignObjectBuiltins;
+import com.oracle.graal.python.builtins.objects.foreign.ForeignTimeZoneBuiltins;
 import com.oracle.graal.python.builtins.objects.frame.FrameBuiltins;
 import com.oracle.graal.python.builtins.objects.function.AbstractFunctionBuiltins;
 import com.oracle.graal.python.builtins.objects.function.FunctionBuiltins;
@@ -550,6 +558,8 @@ public enum PythonBuiltinClassType implements TruffleObject {
                     These are exactly the valid indices for a list of 4 elements.
                     When step is given, it specifies the increment (or decrement).""")),
     PReferenceType("ReferenceType", PythonObject, newBuilder().publishInModule("_weakref").basetype().slots(ReferenceTypeBuiltins.SLOTS)),
+    PProxyType("ProxyType", PythonObject, newBuilder().moduleName("weakref").publishInModule("_weakref").slots(ProxyTypeBuiltins.SLOTS)),
+    PCallableProxyType("CallableProxyType", PythonObject, newBuilder().moduleName("weakref").publishInModule("_weakref")),
     PSentinelIterator("callable_iterator", PythonObject, newBuilder().disallowInstantiation().slots(SentinelIteratorBuiltins.SLOTS)),
     PReverseIterator("reversed", PythonObject, newBuilder().publishInModule(J_BUILTINS).basetype().slots(ReversedBuiltins.SLOTS).doc("""
                     Return a reverse iterator over the values of the given sequence.""")),
@@ -751,7 +761,7 @@ public enum PythonBuiltinClassType implements TruffleObject {
     IndexError("IndexError", LookupError, newBuilder().publishInModule(J_BUILTINS).basetype().addDict()),
     KeyError("KeyError", LookupError, newBuilder().publishInModule(J_BUILTINS).basetype().addDict().slots(KeyErrorBuiltins.SLOTS)),
     MemoryError("MemoryError", Exception, newBuilder().publishInModule(J_BUILTINS).basetype().addDict()),
-    NameError("NameError", Exception, newBuilder().publishInModule(J_BUILTINS).basetype().addDict()),
+    NameError("NameError", Exception, newBuilder().publishInModule(J_BUILTINS).basetype().addDict().slots(NameErrorBuiltins.SLOTS)),
     UnboundLocalError("UnboundLocalError", NameError, newBuilder().publishInModule(J_BUILTINS).basetype().addDict()),
     OSError("OSError", Exception, newBuilder().publishInModule(J_BUILTINS).basetype().addDict().slots(OsErrorBuiltins.SLOTS)),
     BlockingIOError("BlockingIOError", OSError, newBuilder().publishInModule(J_BUILTINS).basetype().addDict()),
@@ -771,11 +781,13 @@ public enum PythonBuiltinClassType implements TruffleObject {
     TimeoutError("TimeoutError", OSError, newBuilder().publishInModule(J_BUILTINS).basetype().addDict()),
     ZLibError("error", Exception, newBuilder().publishInModule("zlib").basetype().addDict()),
     CSVError("Error", Exception, newBuilder().publishInModule("_csv").basetype().addDict()),
+    PyExpatError("error", Exception, newBuilder().publishInModule("pyexpat").basetype().addDict()),
     LZMAError("LZMAError", Exception, newBuilder().publishInModule("_lzma").basetype().addDict()),
     StructError("StructError", Exception, newBuilder().publishInModule(J__STRUCT).basetype().addDict()),
     PickleError("PickleError", Exception, newBuilder().publishInModule("_pickle").basetype().addDict()),
     PicklingError("PicklingError", PickleError, newBuilder().publishInModule("_pickle").basetype().addDict()),
     UnpicklingError("UnpicklingError", PickleError, newBuilder().publishInModule("_pickle").basetype().addDict()),
+    SignalItimerError("itimer_error", OSError, newBuilder().publishInModule(J__SIGNAL).moduleName(J_SIGNAL).basetype().addDict()),
     SocketGAIError("gaierror", OSError, newBuilder().publishInModule(J__SOCKET).basetype().addDict()),
     SocketHError("herror", OSError, newBuilder().publishInModule(J__SOCKET).basetype().addDict()),
     BinasciiError("Error", ValueError, newBuilder().publishInModule("binascii").basetype().addDict()),
@@ -981,7 +993,13 @@ public enum PythonBuiltinClassType implements TruffleObject {
                                     UnraisableHookArgs
 
                                     Type used to pass arguments to sys.unraisablehook.""")),
+    PExceptHookArgs(
+                    "_ExceptHookArgs",
+                    PTuple,
+                    newBuilder().publishInModule(J__THREAD).slots(StructSequenceBuiltins.SLOTS, InstantiableStructSequenceBuiltins.SLOTS).doc("""
+                                    _ExceptHookArgs
 
+                                    Type used to pass arguments to _thread._excepthook.""")),
     PSSLSession("SSLSession", PythonObject, newBuilder().publishInModule(J__SSL).disallowInstantiation()),
     PSSLContext("_SSLContext", PythonObject, newBuilder().publishInModule(J__SSL).basetype().slots(SSLContextBuiltins.SLOTS)),
     PSSLSocket("_SSLSocket", PythonObject, newBuilder().publishInModule(J__SSL).basetype()),
@@ -1165,6 +1183,11 @@ public enum PythonBuiltinClassType implements TruffleObject {
                     PythonObject,
                     newBuilder().publishInModule("_json").basetype().slots(JSONEncoderBuiltins.SLOTS).doc("""
                                     _iterencode(obj, _current_indent_level) -> iterable""")),
+    XMLParser(
+                    "xmlparser",
+                    PythonObject,
+                    newBuilder().publishInModule("pyexpat").basetype().disallowInstantiation().slots(XMLParserBuiltins.SLOTS).doc("""
+                                    pyexpat XML parser object""")),
 
     // datetime
     PDate(
@@ -1216,6 +1239,34 @@ public enum PythonBuiltinClassType implements TruffleObject {
                     "timezone",
                     PTzInfo,
                     newBuilder().moduleName("datetime").publishInModule("_datetime").slots(TimeZoneBuiltins.SLOTS).doc("Fixed offset from UTC implementation of tzinfo.")),
+
+    // foreign datetime
+    ForeignDate("ForeignDate", PDate, newBuilder().publishInModule(J_POLYGLOT).basetype().addDict().disallowInstantiation()),
+    ForeignTime("ForeignTime", PTime, newBuilder().publishInModule(J_POLYGLOT).basetype().addDict().disallowInstantiation()),
+    ForeignDateTime("ForeignDateTime", PDateTime, newBuilder().publishInModule(J_POLYGLOT).basetype().addDict().disallowInstantiation()),
+    ForeignTimeZone("ForeignTimeZone", PTzInfo, newBuilder().publishInModule(J_POLYGLOT).basetype().addDict().disallowInstantiation().slots(ForeignTimeZoneBuiltins.SLOTS)),
+
+    // re
+    PPattern(
+                    "Pattern",
+                    PythonObject,
+                    newBuilder().moduleName("re").publishInModule("_sre").slots(PatternBuiltins.SLOTS).doc("Compiled regular expression object.")),
+
+    PMatch(
+                    "Match",
+                    PythonObject,
+                    newBuilder().moduleName("re").publishInModule("_sre").slots(MatchBuiltins.SLOTS).doc(
+                                    "The result of re.match() and re.search().\nMatch objects always have a boolean value of True.")),
+
+    SRETemplate(
+                    "SRE_Template",
+                    PythonObject,
+                    newBuilder().publishInModule("_sre")),
+
+    SREScanner(
+                    "SRE_Scanner",
+                    PythonObject,
+                    newBuilder().publishInModule("_sre")),
 
     // csv
     CSVDialect("Dialect", PythonObject, newBuilder().publishInModule("_csv").basetype().slots(CSVDialectBuiltins.SLOTS)),
@@ -1539,7 +1590,10 @@ public enum PythonBuiltinClassType implements TruffleObject {
     private final TpSlots declaredSlots;
 
     /**
-     * The actual slots including slots inherited from base classes
+     * The actual slots including slots inherited from base classes.
+     *
+     * n.b.: this field is positioned to be at the same offset as the one in
+     * {@link com.oracle.graal.python.builtins.objects.type.PythonManagedClass#tpSlots}.
      */
     private final TpSlots slots;
 

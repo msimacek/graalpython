@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2025, Oracle and/or its affiliates.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates.
 # Copyright (c) 2013, Regents of the University of California
 #
 # All rights reserved.
@@ -69,10 +69,9 @@ CONFIGURATION_NATIVE_INTERPRETER = "native-interpreter"
 CONFIGURATION_DEFAULT_MULTI = "default-multi"
 CONFIGURATION_INTERPRETER_MULTI = "interpreter-multi"
 CONFIGURATION_NATIVE_INTERPRETER_MULTI = "native-interpreter-multi"
-CONFIGURATION_DEFAULT_MULTI_TIER = "default-multi-tier"
 CONFIGURATION_NATIVE = "native"
+CONFIGURATION_UNCACHED = "interpreter-uncached"
 CONFIGURATION_NATIVE_MULTI = "native-multi"
-CONFIGURATION_NATIVE_MULTI_TIER = "native-multi-tier"
 CONFIGURATION_SANDBOXED = "sandboxed"
 CONFIGURATION_SANDBOXED_MULTI = "sandboxed-multi"
 
@@ -85,6 +84,17 @@ CONFIGURATION_JAVA_EMBEDDING_INTERPRETER_MULTI_SHARED = "java-driver-interpreter
 DEFAULT_ITERATIONS = 10
 
 BENCH_BGV = 'benchmarks-bgv'
+
+BENCHMARK_DEBUG_ARGS = (
+    # These first two are not /too/ bad for runtime
+    # '--python.PoisonNativeMemoryOnFree=true',
+    # '--python.SampleNativeMemoryAllocSites=true',
+
+    # These below can be *extremely* heavy
+    # '--python.TraceNativeMemory=true',
+    # '--python.TraceNativeMemoryCalls=true',
+    # '--log.python.level=FINER',
+)
 
 # ----------------------------------------------------------------------------------------------------------------------
 #
@@ -297,14 +307,7 @@ class GraalPythonVm(AbstractPythonIterationsControlVm):
         return launcher
 
     def post_process_command_line_args(self, args):
-        if os.environ.get('BYTECODE_DSL_INTERPRETER', '').lower() == 'true' and not self.is_bytecode_dsl_config():
-            print("Found environment variable BYTECODE_DSL_INTERPRETER, but the guest vm config is not Bytecode DSL config.")
-            print("Did you want to use, e.g., `mx benchmark ... -- --python-vm-config=default-bc-dsl`?")
-            sys.exit(1)
         return self.get_extra_polyglot_args() + args
-
-    def is_bytecode_dsl_config(self):
-        return '--vm.Dpython.EnableBytecodeDSLInterpreter=true' in self.get_extra_polyglot_args()
 
     def extract_vm_info(self, args=None):
         out_version = subprocess.check_output([self.interpreter, '--version'], universal_newlines=True)
@@ -323,23 +326,14 @@ class GraalPythonVm(AbstractPythonIterationsControlVm):
             "platform.graalvm-version": graalvm_version_match[2],
             "platform.graalvm-version-string": graalvm_version_match[1],
         }
-        if dims['guest-vm-config'].endswith('-3-compiler-threads'):
-            dims['guest-vm-config'] = dims['guest-vm-config'].replace('-3-compiler-threads', '')
-            dims['host-vm-config'] += '-3-compiler-threads'
         self._dims = dims
 
     def run(self, *args, **kwargs):
         code, out, dims = super().run(*args, **kwargs)
         dims.update(self._dims)
-
-        is_bytecode_dsl_config = self.is_bytecode_dsl_config()
-        if "using bytecode DSL interpreter:" not in out:
-            # Let's be lenient unless in CI
-            print(f"BENCHMARK WARNING: could not verify whether running on bytecode DSL or not")
-        elif code == 0 and not f"using bytecode DSL interpreter: {is_bytecode_dsl_config}" in out:
-            print(f"ERROR: host VM config does not match what the the harness reported. "
-                  f"Expected Bytecode DSL interpreter = {is_bytecode_dsl_config}. Harness output:\n{out}", file=sys.stderr)
-            return 1, out, dims
+        is_uncached_config = self.config_name().startswith(CONFIGURATION_UNCACHED)
+        if ("forced uncached interpreter: True" not in out) == is_uncached_config:
+            mx.abort(f"ERROR: benchmark config '{CONFIGURATION_UNCACHED}' not consistent with what runtime reported.")
         return code, out, dims
 
     def get_extra_polyglot_args(self):
@@ -801,7 +795,7 @@ class PythonBenchmarkSuite(PythonBaseBenchmarkSuite):
     @classmethod
     def get_benchmark_suites(cls, benchmarks):
         assert isinstance(benchmarks, dict), "benchmarks must be a dict: {suite: [path, {bench: args, ... }], ...}"
-        return [cls(suite_name, suite_info[0], suite_info[1])
+        return [cls(suite_name, *suite_info)
                 for suite_name, suite_info in benchmarks.items()]
 
 
@@ -1078,7 +1072,7 @@ def register_vms(suite, sandboxed_options):
 
     def add_graalpy_vm(name, *extra_polyglot_args):
         graalpy_vms.append((name, extra_polyglot_args))
-        python_vm_registry.add_vm(GraalPythonVm(config_name=name, extra_polyglot_args=extra_polyglot_args), suite, 10)
+        python_vm_registry.add_vm(GraalPythonVm(config_name=name, extra_polyglot_args=BENCHMARK_DEBUG_ARGS + extra_polyglot_args), suite, 10)
 
     # GraalPy VMs:
     add_graalpy_vm(CONFIGURATION_DEFAULT)
@@ -1086,23 +1080,17 @@ def register_vms(suite, sandboxed_options):
     add_graalpy_vm(CONFIGURATION_INTERPRETER, '--experimental-options', '--engine.Compilation=false')
     add_graalpy_vm(CONFIGURATION_DEFAULT_MULTI, '--experimental-options', '-multi-context')
     add_graalpy_vm(CONFIGURATION_INTERPRETER_MULTI, '--experimental-options', '-multi-context', '--engine.Compilation=false')
-    add_graalpy_vm(CONFIGURATION_DEFAULT_MULTI_TIER, '--experimental-options', '--engine.MultiTier=true')
     add_graalpy_vm(CONFIGURATION_SANDBOXED, *sandboxed_options)
     add_graalpy_vm(CONFIGURATION_NATIVE)
+    add_graalpy_vm(CONFIGURATION_UNCACHED, '--experimental-options', '--engine.Compilation=false', '--python.ForceUncachedInterpreter=true')
     add_graalpy_vm(CONFIGURATION_NATIVE_INTERPRETER, '--experimental-options', '--engine.Compilation=false')
     add_graalpy_vm(CONFIGURATION_SANDBOXED_MULTI, '--experimental-options', '-multi-context', *sandboxed_options)
     add_graalpy_vm(CONFIGURATION_NATIVE_MULTI, '--experimental-options', '-multi-context')
     add_graalpy_vm(CONFIGURATION_NATIVE_INTERPRETER_MULTI, '--experimental-options', '-multi-context', '--engine.Compilation=false')
-    add_graalpy_vm(CONFIGURATION_NATIVE_MULTI_TIER, '--experimental-options', '--engine.MultiTier=true')
 
-    # all of the graalpy vms, but with bc dsl
-    for name, extra_polyglot_args in graalpy_vms[:]:
-        add_graalpy_vm(f'{name}-bc-dsl', *['--vm.Dpython.EnableBytecodeDSLInterpreter=true', *extra_polyglot_args])
-
-    # all of the graalpy vms, but with different numbers of compiler threads
+    # all of the graalpy vms, but with one compiler thread
     for name, extra_polyglot_args in graalpy_vms[:]:
         add_graalpy_vm(f'{name}-1-compiler-threads', *['--engine.CompilerThreads=1', *extra_polyglot_args])
-        add_graalpy_vm(f'{name}-3-compiler-threads', *['--engine.CompilerThreads=3', *extra_polyglot_args])
 
     # java embedding driver
     python_java_embedding_vm_registry.add_vm(
@@ -1165,10 +1153,10 @@ def graalpython_polybench_runner(polybench_run: mx_polybench.PolybenchRunFunctio
 
 
 mx_polybench.register_polybench_benchmark_suite(mx_suite=SUITE, name="python", languages=["python"], benchmark_distribution="GRAALPYTHON_POLYBENCH_BENCHMARKS",
-                                                # Match all python files, except for:
-                                                #  * harness.py
-                                                #  * tests/__init__.py
-                                                # These two are necessary for running the C-extension-module benchmarks,
-                                                # but are not benchmarks themselves.
-                                                benchmark_file_filter=r"^(?!.*(harness\.py|tests/__init__\.py)$).*\.py$",
+                                                # There are python files that are necessary for running some benchmarks,
+                                                # but are not benchmarks themselves. For this reason, we exclude them:
+                                                #  * harness.py                             (C-extension-module)
+                                                #  * tests/__init__.py                      (C-extension-module)
+                                                #  * interpreter/bench_core.py              (numpy)
+                                                benchmark_file_filter=r"^(?!.*(harness\.py|tests/__init__\.py|interpreter/bench_core\.py)$).*\.py$",
                                                 runner=graalpython_polybench_runner, tags={"gate", "benchmark", "instructions"})

@@ -5,7 +5,7 @@ suite = {
     #  METADATA
     #
     # --------------------------------------------------------------------------------------------------------------
-    "mxversion": "7.67.0",
+    "mxversion": "7.81.0",
     "name": "graalpython",
     "versionConflictResolution": "latest",
 
@@ -53,7 +53,7 @@ suite = {
             },
             {
                 "name": "tools",
-                "version": "fe1e946b4b8528f68d82984ca29d12198c533db1",
+                "version": "6eb90f1ca8ea93cb3dca39a5cdd7e492cfb721fd",
                 "subdir": True,
                 "urls": [
                     {"url": "https://github.com/oracle/graal", "kind": "git"},
@@ -61,7 +61,7 @@ suite = {
             },
             {
                 "name": "regex",
-                "version": "fe1e946b4b8528f68d82984ca29d12198c533db1",
+                "version": "6eb90f1ca8ea93cb3dca39a5cdd7e492cfb721fd",
                 "subdir": True,
                 "urls": [
                     {"url": "https://github.com/oracle/graal", "kind": "git"},
@@ -102,40 +102,40 @@ suite = {
             ],
             "digest": "sha512:16920fd41f398696c563417049472c0d81abb2d293ecb45bbbe97c12651669833e34eac238e2e4a6f8761ea58fb39806425d2741e88e8c3097fe2b5457ebf488",
         },
-        "XZ-5.6.2": {
+        "XZ-5.8.3": {
             "urls": [
-                "https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/xz-5.6.2.tar.gz",
+                "https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/xz-5.8.3.tar.gz",
             ],
             "packedResource": True,
-            "digest": "sha512:c32c32c95e3541b906e0284e66a953ace677e0ce6af2084e7b122600047bf7542c1b0fabb5909b19ff79fba6def530be674df1c675b22a47a8d57f3f0b736a82",
+            "digest": "sha512:bd77164795b5cbfbe864f64021e67e37f39cb9aba9abdd894d53fbb6857abe074923808918d1dc3bb0706253e726b2b9704cd0c3bc744d70e220c7356fa4995e",
         },
         "BOUNCYCASTLE-PROVIDER": {
-            "digest": "sha512:fb10c3c089921c8173ad285329f730e0e78de175d1b50b9bdd79c6a85a265af9b3331caa0c1ed57e5f47047319ce3b0f3bb5def0a3db9cccf2755cc95e145e52",
-            "sourceDigest": "sha512:7b06374b75040a1dba9419e17be29a155f01b14961521adcb8e980397b6ac7e2de55958e74ad41ba94766c4e992935abbd94fb964dbf806445a63a7346c0ae2e",
+            "digest": "sha512:4b7e5696830023bad1594d9f9766898f78018ec7d6ec34de23f2a6683b02803b92ffe8ab5d21f1a717eb4fafa8e22dcf3a4b6dd275bd86c7cb02609987fe92f5",
+            "sourceDigest": "sha512:2d266985014d38f701ac4c8e5482d767488e6fdd48d16973703ef2268138baf71b53ac283c969004bad709e1664b2f2446a1f56102af876d35ccceb03e44fbb9",
             "maven": {
               "groupId": "org.bouncycastle",
               "artifactId": "bcprov-jdk18on",
-              "version": "1.78.1",
+              "version": "1.84",
             },
             "moduleName": "org.bouncycastle.provider",
         },
         "BOUNCYCASTLE-PKIX": {
-            "digest": "sha512:d71a45844a7946b6a70315254e82a335d2df5e402b2d5a3b496fa69b355184338011b49c5f1c76026764a76f62f2bc140c25db2881bca91dde9677a25c6d587b",
-            "sourceDigest": "sha512:8508e9b26c60cc2fd3219d8ab0d3928891ecc42926e7c862c0fbf9940a4bcffe35c4a76c3934b33ed4311817dbf3b0b50068482f7c5f550261a50cc97879923a",
+            "digest": "sha512:01644d7e0c6041ea8c8629f6ad73f7206efa2797d954da1507dd43c5d262a161194ed84e960234cf5c53787033f1181aa4965e0d6ebfe82ca040de13ca307565",
+            "sourceDigest": "sha512:2c405cbefcd75b97b11df470025f3e51286bd11fd735607d8d512133ec49f9887dc282b4af0f434b49064fa1eab3e14d1f2c860187fb9fb8939330fc64602ba4",
             "maven": {
                 "groupId": "org.bouncycastle",
                 "artifactId": "bcpkix-jdk18on",
-                "version": "1.78.1",
+                "version": "1.84",
             },
             "moduleName": "org.bouncycastle.pkix",
         },
         "BOUNCYCASTLE-UTIL": {
-            "digest": "sha512:6a338c50d662993c9f00bba23f98443c923b9a95ff61dc653906f51857f8afaecc57a536bfaf6848ac8e7e9ce0a21f84ec068815853261268f97e951526bc766",
-            "sourceDigest": "sha512:852a1679a9c690f97c4ed175272b04ebedc89b9e4aa0322f32a799f619fd71602f89545fc02bb1093750ad7d796500fdd116203862ccecb3085af40aadcccea6",
+            "digest": "sha512:e001b244723fb3c4d1e06862bb857512015a92d7e18650ae3447a3d258274ec8ed37b8cba958397b00f8dd73463943e9a9489dd5dbddbe24b24cd6fae5ca8a62",
+            "sourceDigest": "sha512:01ece60806f4ba9bc78509a4521eab164b37197d8d0ad647c46b77deff0aebdc5191875690edb513fd8266be41daaaf0ccca1b0c7a53df1d059950b79d0f4a26",
             "maven": {
                 "groupId": "org.bouncycastle",
                 "artifactId": "bcutil-jdk18on",
-                "version": "1.78.1",
+                "version": "1.84",
             },
             "moduleName": "org.bouncycastle.util",
         },
@@ -390,13 +390,11 @@ suite = {
                 "truffle:TRUFFLE_XZ",
                 "truffle:TRUFFLE_ICU4J",
                 "regex:TREGEX",
-                "BOUNCYCASTLE-PROVIDER",
-                "BOUNCYCASTLE-PKIX",
-                "BOUNCYCASTLE-UTIL",
             ],
             "requires": [
                 "java.logging",
                 "java.management",
+                "java.xml",
                 "jdk.management",
                 "jdk.unsupported",
                 "jdk.security.auth",
@@ -409,6 +407,29 @@ suite = {
                 "truffle:TRUFFLE_DSL_PROCESSOR"
             ],
             "forceJavac": True, # GRAALPYTHON_PROCESSOR is not compatible with ECJ
+            "workingSets": "Truffle,Python",
+            "spotbugsIgnoresGenerated": True,
+        },
+
+        "com.oracle.graal.python.bouncycastle": {
+            "subDir": "graalpython",
+            "sourceDirs": ["src"],
+            "dependencies": [
+                "GRAALPYTHON",
+                "BOUNCYCASTLE-PROVIDER",
+                "BOUNCYCASTLE-PKIX",
+                "BOUNCYCASTLE-UTIL",
+            ],
+            "requires": [
+                "java.logging",
+                "java.management",
+                "jdk.management",
+                "jdk.unsupported",
+                "jdk.security.auth",
+            ],
+            "jacoco": "include",
+            "checkstyle": "com.oracle.graal.python",
+            "javaCompliance": "17+",
             "workingSets": "Truffle,Python",
             "spotbugsIgnoresGenerated": True,
         },
@@ -550,7 +571,7 @@ suite = {
                 "bin/<lib:bz2support>",
             ],
             "cmakeConfig": {
-                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_BUILD_TYPE": "<graalpy_cmake_build_type>",
                 "BZIP2_ROOT": "<path:BZIP2>",
                 "BZIP2_VERSION_MAJOR": "1",
                 "BZIP2_VERSION_MINOR": "0",
@@ -595,10 +616,10 @@ suite = {
                 "bin/<lib:lzmasupport>",
             ],
             "cmakeConfig": {
-                "XZ_SRC": "<path:XZ-5.6.2>",
+                "XZ_SRC": "<path:XZ-5.8.3>",
                 "XZ_VERSION_MAJOR": "5",
-                "XZ_VERSION_MINOR": "6",
-                "XZ_VERSION_PATCH": "2",
+                "XZ_VERSION_MINOR": "8",
+                "XZ_VERSION_PATCH": "3",
             },
             "os_arch": {
                 "windows": {
@@ -620,7 +641,7 @@ suite = {
                 },
             },
             "buildDependencies": [
-                "XZ-5.6.2",
+                "XZ-5.8.3",
             ],
         },
 
@@ -630,7 +651,7 @@ suite = {
             "max_jobs": "1",
             "ninja_targets": ["all"],
             "cmakeConfig": {
-                "GRAALPY_VER": "<py_ver:binary><graal_ver:binary><release_level:binary><dev_tag:none>",
+                "GRAALPY_VER": "<py_ver:binary><graal_ver:binary><release_level:binary><abi_version>",
             },
             "results": [
                 "graalpy_versions"
@@ -674,7 +695,7 @@ suite = {
                             # "Release": highest opt level, no debugging symbols, no assertions, -DNDEBUG, etc.
                             # "RelWithDebInfo": medium opt level, with debugging symbols, no assertions, -DNDEBUG
                             # "Debug": no opt level, debugging symbols, assertions, ...
-                            "CMAKE_BUILD_TYPE": "Release",
+                            "CMAKE_BUILD_TYPE": "<graalpy_cmake_build_type>",
                             "CAPI_INC_DIR": "<output_root:com.oracle.graal.python>/jni_gen",
                             "PYCONFIG_INCLUDE_DIR": "<output_root:graalpy-pyconfig>/<os>-<arch>/<multitarget_libc_selection>",
                             "TRUFFLE_NFI_H_INC": "<path:com.oracle.truffle.nfi.native>/include",
@@ -710,7 +731,7 @@ suite = {
                             # "Release": highest opt level (e.g. -O3, -lto), no debugging symbols, no assertions, -DNDEBUG, etc.
                             # "RelWithDebInfo": medium opt level (e.g. -O2, -lto), with debugging symbols, no assertions, -DNDEBUG
                             # "Debug": no opt level, debugging symbols, assertions, ...
-                            "CMAKE_BUILD_TYPE": "Release",
+                            "CMAKE_BUILD_TYPE": "<graalpy_cmake_build_type>",
                             "CAPI_INC_DIR": "<output_root:com.oracle.graal.python>/jni_gen",
                             "PYCONFIG_INCLUDE_DIR": "<output_root:graalpy-pyconfig>/<os>-<arch>/<multitarget_libc_selection>/",
                             "TRUFFLE_NFI_H_INC": "<path:com.oracle.truffle.nfi.native>/include",
@@ -861,6 +882,7 @@ suite = {
             "default_vm_args": [
                 "--vm.Xss16777216", # request 16M of stack
                 '--vm.-enable-native-access=org.graalvm.shadowed.jline',
+                '<bcflags>',
             ],
             "multitarget": [
                 {"os": ["linux"], "libc": ["glibc", "default"], "compiler": ["llvm-toolchain", "host", "*"]},
@@ -880,6 +902,7 @@ suite = {
             "build_args": [
                 # From mx.graalpython/native-image.properties
                 "--add-exports", "org.graalvm.nativeimage/org.graalvm.nativeimage.impl=ALL-UNNAMED",
+                "--add-exports", "org.graalvm.py/com.oracle.graal.python.builtins.objects.ssl=ALL-UNNAMED",
                 "-R:StackSize=16777216",
                 "-H:+AddAllCharsets",
                 "-H:IncludeLocales=no,be,ro,ru,es,se,in,ka,hu,hr,bg,is,mk,da,nn,cs,sq,fr,pl,fo,bs,kl,fa,sv,it,uk,af,tg,ps,de",
@@ -888,10 +911,12 @@ suite = {
                 # GraalPy standalone specific flags
                 # uncomment to disable JLine FFM provider at native image build time
                 #'-Dorg.graalvm.shadowed.org.jline.terminal.ffm.disable=true',
-                 '--enable-native-access=org.graalvm.shadowed.jline',
+                '--enable-native-access=org.graalvm.shadowed.jline',
                 "-Dpolyglot.python.PosixModuleBackend=native",
                 "-Dpolyglot.python.Sha3ModuleBackend=native",
                 "-Dpolyglot.python.CompressionModulesBackend=native",
+                "-Dpolyglot.python.PyExpatModuleBackend=native",
+                "-Dpolyglot.python.UnicodeCharacterDatabaseNativeFallback=true",
             ],
             "dynamicBuildArgs": "libpythonvm_build_args",
         },
@@ -950,7 +975,7 @@ suite = {
                 "sdk:MAVEN_DOWNLOADER",
                 "sdk:NATIVEIMAGE",
             ],
-            "description": "GraalPy, a high-performance embeddable Python 3 runtime for Java. This artifact provides a command-line launcher for GraalPy.",
+            "description": "GraalPy, a high-performance embeddable Python 3 runtime. This artifact provides a command-line launcher for GraalPy.",
             "maven": {
                 "groupId": "org.graalvm.python",
                 "artifactId": "python-launcher",
@@ -1020,7 +1045,7 @@ suite = {
                 "java.base",
             ],
             "compress": True,
-            "description": "GraalPy, a high-performance embeddable Python 3 runtime for Java. This artifact includes the GraalPy standard library. It is not recommended to depend on the artifact directly. Instead, use \'org.graalvm.polyglot:python\' or \'org.graalvm.polyglot:python-community\' to ensure all dependencies are pulled in correctly.",
+            "description": "GraalPy, a high-performance embeddable Python 3 runtime. This artifact includes the GraalPy standard library. It is not recommended to depend on the artifact directly. Instead, use \'org.graalvm.polyglot:python\' or \'org.graalvm.polyglot:python-community\' to ensure all dependencies are pulled in correctly.",
             "maven": {
                 "artifactId": "python-resources",
                 "groupId": "org.graalvm.python",
@@ -1033,11 +1058,47 @@ suite = {
             ],
         },
 
+        "GRAALPYTHON_BOUNCYCASTLE": {
+            "dependencies": [
+                "com.oracle.graal.python.bouncycastle",
+            ],
+            "distDependencies": [
+                "GRAALPYTHON",
+                "truffle:TRUFFLE_API",
+                "tools:TRUFFLE_PROFILER",
+                "regex:TREGEX",
+                "sdk:POLYGLOT",
+                "sdk:NATIVEIMAGE",
+                "sdk:COLLECTIONS",
+                "truffle:TRUFFLE_NFI",
+                "truffle:TRUFFLE_NFI_LIBFFI",
+                "truffle:TRUFFLE_NFI_PANAMA",
+                "truffle:TRUFFLE_ICU4J",
+                "truffle:TRUFFLE_XZ",
+            ],
+            "exclude": [
+                "BOUNCYCASTLE-PROVIDER",
+                "BOUNCYCASTLE-PKIX",
+                "BOUNCYCASTLE-UTIL",
+            ],
+            "description": "Optional GraalPy BouncyCastle integration.",
+            "maven": {
+                "artifactId": "python-bouncycastle-support",
+                "groupId": "org.graalvm.python",
+                "tag": ["public"],
+            },
+        },
+
         "GRAALPYTHON": {
             "moduleInfo": {
                 "name": "org.graalvm.py",
                 "exports": [
                     "com.oracle.graal.python.* to org.graalvm.py.enterprise",
+                    "com.oracle.graal.python.builtins.objects.ssl to graalpython.bouncycastle",
+                    "com.oracle.graal.python.runtime.crypto",
+                ],
+                "uses": [
+                    "com.oracle.graal.python.runtime.crypto.BouncyCastleSupport",
                 ],
             },
             "useModulePath": True,
@@ -1067,12 +1128,7 @@ suite = {
                 "jdk.unsupported",
                 "jdk.security.auth",
             ],
-            "exclude": [
-                "BOUNCYCASTLE-PROVIDER",
-                "BOUNCYCASTLE-PKIX",
-                "BOUNCYCASTLE-UTIL",
-            ],
-            "description": "GraalPy, a high-performance embeddable Python 3 runtime for Java. This artifact includes the core language runtime without standard libraries. It is not recommended to depend on the artifact directly. Instead, use \'org.graalvm.polyglot:python\' or \'org.graalvm.polyglot:python-community\' to ensure all dependencies are pulled in correctly.",
+            "description": "GraalPy, a high-performance embeddable Python 3 runtime. This artifact includes the core language runtime without standard libraries. It is not recommended to depend on the artifact directly. Instead, use \'org.graalvm.polyglot:python\' or \'org.graalvm.polyglot:python-community\' to ensure all dependencies are pulled in correctly.",
             "maven": {
                 "artifactId": "python-language",
                 "groupId": "org.graalvm.python",
@@ -1093,7 +1149,7 @@ suite = {
                 "GRAALPYTHON_RESOURCES",
                 "truffle:TRUFFLE_RUNTIME",
             ],
-            "description": "GraalPy, a high-performance embeddable Python 3 runtime for Java. This POM dependency includes GraalPy dependencies and Truffle Community Edition.",
+            "description": "GraalPy, a high-performance embeddable Python 3 runtime. This POM dependency includes GraalPy dependencies and Truffle Community Edition.",
             "maven": {
                 "groupId": "org.graalvm.python",
                 "artifactId": "python",
@@ -1425,9 +1481,6 @@ suite = {
             "distDependencies": [
                 "graalpython:GRAALPYTHON-LAUNCHER",
                 "graalpython:GRAALPYTHON",
-                "graalpython:BOUNCYCASTLE-PROVIDER",
-                "graalpython:BOUNCYCASTLE-PKIX",
-                "graalpython:BOUNCYCASTLE-UTIL",
                 "sdk:TOOLS_FOR_STANDALONE",
             ],
             "dynamicDistDependencies": "graalpy_standalone_deps",
@@ -1533,12 +1586,99 @@ suite = {
                     "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/c-call-method.py",
                     "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/c-instantiate-large.py",
                     "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/c-issubtype-monorphic.py",
-                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/c-issubtype-polymorphic-forced-to-native.py",
                     "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/c-issubtype-polymorphic.py",
                     "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/c-list-iterating-obj.py",
                     "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/c-magic-bool.py",
                     "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/c-magic-iter.py",
                     "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/c-member-access.py",
+                    # Batch 4 (pyperformance)
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/bm_pathlib.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/bm_pickle.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/bm_richards.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/chaos.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/fannkuch.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/float.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/go.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/hexiom.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/json_dumps.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/json_loads.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/meteor_contest.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/nbody.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/nqueens.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/pickle_dict.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/pickle_list.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/pidigits.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/pyflate.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/regex_compile.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/regex_dna.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/regex_effbot.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/regex_v8.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/scimark.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/spectral_norm.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/telco.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/unpack_sequence.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/unpickle_list.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/unpickle.py",
+                ],
+                "./numpy/": [
+                    # Batch 5 (numpy)
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_array_1.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_array_empty.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_arange_100.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_array_float64_l1000.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_array_float_l1000.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_array_float_l1000_dtype.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_array_int_l1000.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_array_l.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_array_l1.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_array_l100.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_array_l_view.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_can_cast.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_can_cast_same_kind.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_diag_l100.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_diagflat_l100.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_diagflat_l50_l50.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_dstack_l.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_empty_100.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_empty_like.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_eye_100.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_eye_3000.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_hstack_l.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_identity_100.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_identity_3000.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_ones_100.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_tril_indices_500.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_tril_l10x10.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_triu_indices_500.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_triu_l10x10.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_vstack_l.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Core.time_zeros_100.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.CorrConv.time_convolve.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.CorrConv.time_correlate.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.CountNonzero.time_count_nonzero.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.CountNonzero.time_count_nonzero_axis.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.CountNonzero.time_count_nonzero_multi_axis.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Indices.time_indices.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.PackBits.time_packbits.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.PackBits.time_packbits_axis0.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.PackBits.time_packbits_axis1.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.PackBits.time_packbits_little.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.StatsMethods.time_max.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.StatsMethods.time_mean.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.StatsMethods.time_min.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.StatsMethods.time_prod.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.StatsMethods.time_std.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.StatsMethods.time_sum.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.StatsMethods.time_var.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Temporaries.time_large.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Temporaries.time_large2.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Temporaries.time_mid.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.Temporaries.time_mid2.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.UnpackBits.time_unpackbits.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.UnpackBits.time_unpackbits_axis0.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.UnpackBits.time_unpackbits_axis1.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.UnpackBits.time_unpackbits_axis1_little.py",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.UnpackBits.time_unpackbits_little.py",
                 ],
                 # Interpreter supporting infra
                 "./interpreter/harness.py": [
@@ -1547,10 +1687,26 @@ suite = {
                 "./interpreter/tests/": [
                     "file:graalpython/com.oracle.graal.python.test/src/tests/__init__.py",
                 ],
+                "./interpreter/data/": [
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/data/interpreter.tar.bz2",
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/pyperformance/data/telco-bench.b",
+                ],
+                "./numpy/bench_core.py": [
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/bench_core.py",
+                ],
+                "./numpy/common.py": [
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/micro/numpy/common.py",
+                ],
                 # Warmup benchmarks
                 "./warmup/": [
                     "file:benchmarks/warmup/*.py",
                     "dependency:GRAALPYTHON_PYFLATE_BENCHMARK_RESOURCE",
+                ],
+                "./warmup/matplotlib/": [
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/matplotlib/*.py",
+                ],
+                "./warmup/import/": [
+                    "file:graalpython/com.oracle.graal.python.benchmarks/python/warmup/import/*.py",
                 ],
             },
         },
@@ -1559,13 +1715,14 @@ suite = {
             "class": "DeliverableStandaloneArchive",
             "platformDependent": True,
             "standalone_dist": "GRAALPY_NATIVE_STANDALONE",
-            "community_archive_name": "graalpy-community",
-            "enterprise_archive_name": "graalpy",
+            "community_archive_name": "graalpy-community<py_ver:major_minor>",
+            "enterprise_archive_name": "graalpy<py_ver:major_minor>",
             "language_id": "python",
         },
 
         "GRAALPY_JVM_STANDALONE_RELEASE_ARCHIVE": {
             "class": "DeliverableStandaloneArchive",
+            "deploy": False,
             "platformDependent": True,
             "standalone_dist": "GRAALPY_JVM_STANDALONE",
             "community_archive_name": "graalpy-community-jvm",

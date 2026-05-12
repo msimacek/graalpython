@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -41,7 +41,7 @@ import sys
 import unittest
 from unittest import skipIf
 
-from . import CPyExtType, CPyExtTestCase, CPyExtFunction, unhandled_error_compare, assert_raises
+from . import CPyExtType, CPyExtTestCase, CPyExtFunction, compile_module_from_string, unhandled_error_compare, assert_raises
 
 is_windows = sys.platform == "win32"
 
@@ -91,6 +91,55 @@ class AttroClass(object):
 
 
 class TestObject(unittest.TestCase):
+    def test_iter_dict_before_getattr_property(self):
+        module = compile_module_from_string(
+            """
+            #include <Python.h>
+
+            static PyObject* iter_dict_then_get_attr(PyObject* self, PyObject* obj) {
+                PyObject* dict = PyObject_GetAttrString(obj, "__dict__");
+                if (dict == NULL) {
+                    return NULL;
+                }
+
+                Py_ssize_t pos = 0;
+                PyObject *key, *value;
+                while (PyDict_Next(dict, &pos, &key, &value)) {
+                    Py_INCREF(value);
+                    Py_DECREF(value);
+                }
+
+                Py_DECREF(dict);
+                return PyObject_GetAttrString(obj, "area");
+            }
+
+            static PyMethodDef methods[] = {
+                {"iter_dict_then_get_attr", (PyCFunction)iter_dict_then_get_attr, METH_O, NULL},
+                {NULL, NULL, 0, NULL}
+            };
+
+            static struct PyModuleDef module = {
+                PyModuleDef_HEAD_INIT, "test_iter_dict_before_getattr_property", NULL, -1, methods
+            };
+
+            PyMODINIT_FUNC PyInit_test_iter_dict_before_getattr_property(void) {
+                return PyModule_Create(&module);
+            }
+            """,
+            "test_iter_dict_before_getattr_property",
+        )
+
+        class Model:
+            def __init__(self, **kwargs):
+                for key, value in kwargs.items():
+                    setattr(self, key, value)
+
+            @property
+            def area(self):
+                return b"%d" % (self.width * self.height)
+
+        self.assertEqual(module.iter_dict_then_get_attr(Model(width=3, height=4)), b"12")
+
     def test_add(self):
         TestAdd = CPyExtType("TestAdd",
                              """
@@ -659,17 +708,70 @@ class TestObject(unittest.TestCase):
         assert tester.get_tp_name(int) == 'int'
         assert tester.get_tp_name(type(tester)) == 'TestTpName.TestTpName'
 
+    def test_new_exception_with_qualified_name(self):
+        module = compile_module_from_string("""
+            #include "Python.h"
+
+            static PyModuleDef testmodule = {
+                PyModuleDef_HEAD_INIT,
+                "test_new_exception_with_qualified_name",
+                NULL,
+                -1,
+                NULL,
+            };
+
+            PyMODINIT_FUNC PyInit_test_new_exception_with_qualified_name(void)
+            {
+                PyObject *exception = PyErr_NewException("pkg.sub.CustomError", NULL, NULL);
+                if (exception == NULL) {
+                    return NULL;
+                }
+                PyObject *module = PyModule_Create(&testmodule);
+                if (module == NULL) {
+                    Py_DECREF(exception);
+                    return NULL;
+                }
+                PyObject *name = PyObject_GetAttrString(exception, "__name__");
+                if (name == NULL) {
+                    Py_DECREF(exception);
+                    Py_DECREF(module);
+                    return NULL;
+                }
+                const char *name_str = PyUnicode_AsUTF8(name);
+                if (name_str == NULL || PyModule_AddObject(module, name_str, exception) < 0) {
+                    Py_DECREF(name);
+                    Py_DECREF(exception);
+                    Py_DECREF(module);
+                    return NULL;
+                }
+                Py_DECREF(name);
+                return module;
+            }
+        """, "test_new_exception_with_qualified_name")
+        assert module.CustomError.__name__ == "CustomError"
+        assert module.CustomError.__qualname__ == "CustomError"
+        assert module.CustomError.__module__ == "pkg.sub"
+        assert not hasattr(module, "pkg.sub.CustomError")
+
     def test_tp_alloc(self):
         TestTpAlloc = CPyExtType("TestTpAlloc",
                                 '''
-                                static PyObject* testslots_tp_alloc(PyObject* self) {
-                                    return (PyObject*) PyType_Type.tp_alloc(&PyType_Type, 0);
+                                #include "objimpl.h"
+
+                                static PyObject* testslots_has_tp_alloc_and_size(PyObject* self) {
+                                    if (!PyType_Type.tp_alloc) {
+                                        Py_RETURN_FALSE;
+                                    }
+                                    if (!_PyObject_VAR_SIZE(&PyType_Type, 0)) {
+                                        Py_RETURN_FALSE;
+                                    }
+                                    Py_RETURN_TRUE;
                                 }
                                 ''',
-                                tp_methods='{"get_tp_alloc", (PyCFunction)testslots_tp_alloc, METH_NOARGS, ""}',
+                                tp_methods='{"has_tp_alloc_and_size", (PyCFunction)testslots_has_tp_alloc_and_size, METH_NOARGS, ""}',
                                 )
         tester = TestTpAlloc()
-        assert tester.get_tp_alloc() != None
+        assert tester.has_tp_alloc_and_size()
 
     def test_slots_initialized(self):
         TestSlotsInitialized = CPyExtType("TestSlotsInitialized",

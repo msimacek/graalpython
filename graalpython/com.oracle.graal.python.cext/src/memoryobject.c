@@ -1,4 +1,4 @@
-/* Copyright (c) 2018, 2025, Oracle and/or its affiliates.
+/* Copyright (c) 2018, 2026, Oracle and/or its affiliates.
  * Copyright (C) 1996-2020 Python Software Foundation
  *
  * Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
@@ -3407,19 +3407,18 @@ PyTypeObject PyMemoryView_Type = {
 #endif // GraalPy change
 
 // GraalPy additions
-/* called from memoryview implementation to do pointer arithmetics currently not possible from Java */
-PyAPI_FUNC(int8_t *)
-GraalPyPrivate_AddSuboffset(int8_t *ptr, Py_ssize_t offset, Py_ssize_t suboffset)
-{
-        return *(int8_t**)(ptr + offset) + suboffset;
-}
 
 PyAPI_FUNC(PyObject *)
 GraalPyPrivate_MemoryViewFromObject(PyObject *v, int flags)
 {
     if (PyObject_CheckBuffer(v)) {
         Py_buffer* buffer = malloc(sizeof(Py_buffer));
+        if (buffer == NULL) {
+            PyErr_NoMemory();
+            return NULL;
+        }
         if (PyObject_GetBuffer(v, buffer, flags) < 0) {
+            free(buffer);
             return NULL;
         }
         int needs_release = 0;
@@ -3442,6 +3441,11 @@ GraalPyPrivate_MemoryViewFromObject(PyObject *v, int flags)
                 buffer->shape,
                 buffer->strides,
                 buffer->suboffsets);
+        if (mv == NULL) {
+            PyBuffer_Release(buffer);
+            free(buffer);
+            return NULL;
+        }
         if (!needs_release) {
             free(buffer);
         }

@@ -362,6 +362,10 @@ if sys.platform.startswith("win"):
             # Increase the timeout and try again
             time.sleep(timeout)
             timeout *= 2
+            # GraalPy change: if we are this far, also run GC to ensure
+            # all handles are closed
+            if timeout > 4.0:
+                support.gc_collect()
         warnings.warn('tests may fail, delete still pending for ' + pathname,
                       RuntimeWarning, stacklevel=4)
 

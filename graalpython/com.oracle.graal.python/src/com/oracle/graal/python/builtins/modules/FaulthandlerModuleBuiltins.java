@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -45,13 +45,13 @@ import static com.oracle.graal.python.builtins.modules.io.IONodes.T_FLUSH;
 import static com.oracle.graal.python.nodes.BuiltinNames.T_STDERR;
 import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
+import java.io.IOException;
 import java.io.OutputStream;
 import java.io.PrintWriter;
 import java.lang.ref.Reference;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 
 import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
@@ -69,19 +69,25 @@ import com.oracle.graal.python.lib.PyObjectGetAttr;
 import com.oracle.graal.python.lib.PyTimeFromObjectNode;
 import com.oracle.graal.python.lib.PyTimeFromObjectNode.RoundType;
 import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.nodes.PConstructAndRaiseNode;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonTernaryBuiltinNode;
+import com.oracle.graal.python.nodes.function.builtins.PythonUnaryClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
 import com.oracle.graal.python.runtime.ExecutionContext.BoundaryCallContext;
+import com.oracle.graal.python.runtime.GilNode;
 import com.oracle.graal.python.runtime.IndirectCallData.BoundaryCallData;
 import com.oracle.graal.python.runtime.PosixSupportLibrary;
+import com.oracle.graal.python.runtime.PosixSupportLibrary.PosixException;
+import com.oracle.graal.python.runtime.PosixSupportLibrary.UnsupportedPosixFeatureException;
 import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.graal.python.runtime.PythonOptions;
 import com.oracle.graal.python.runtime.exception.ExceptionUtils;
+import com.oracle.graal.python.util.ByteArrayBuilder;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.ThreadLocalAction;
 import com.oracle.truffle.api.TruffleSafepoint;
@@ -94,6 +100,7 @@ import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.exception.AbstractTruffleException;
 import com.oracle.truffle.api.frame.VirtualFrame;
+import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
 
@@ -120,8 +127,16 @@ public final class FaulthandlerModuleBuiltins extends PythonBuiltins {
     }
 
     @TruffleBoundary
-    private static void dumpTraceback(int fd) {
-        ExceptionUtils.printPythonLikeStackTraceNoMessage(newRawFdPrintWriter(fd), new RuntimeException());
+    private static synchronized void dumpTraceback(PythonLanguage language, PrintWriter writer) {
+        writer.println();
+        writer.println(Thread.currentThread());
+        if (PythonOptions.isPExceptionWithJavaStacktrace(language)) {
+            for (StackTraceElement el : Thread.currentThread().getStackTrace()) {
+                writer.println(el);
+            }
+        }
+        ExceptionUtils.printPythonLikeStackTraceNoMessage(writer, new RuntimeException());
+        writer.flush();
     }
 
     @Builtin(name = "dump_traceback", minNumOfPositionalArgs = 0, parameterNames = {"file", "all_threads"})
@@ -151,44 +166,15 @@ public final class FaulthandlerModuleBuiltins extends PythonBuiltins {
 
         @TruffleBoundary
         static void dump(PythonLanguage language, PythonContext context, int fd, Object fileObj, boolean allThreads) {
-            PrintWriter err = newRawFdPrintWriter(fd);
             if (allThreads) {
-                if (PythonOptions.isPExceptionWithJavaStacktrace(language)) {
-                    Thread[] ths = context.getThreads();
-                    for (Map.Entry<Thread, StackTraceElement[]> e : Thread.getAllStackTraces().entrySet()) {
-                        boolean found = false;
-                        for (Thread pyTh : ths) {
-                            if (pyTh == e.getKey()) {
-                                found = true;
-                                break;
-                            }
-                        }
-                        if (!found) {
-                            continue;
-                        }
-                        err.println();
-                        err.println(e.getKey());
-                        for (StackTraceElement el : e.getValue()) {
-                            err.println(el.toString());
-                        }
-                    }
-                }
-
                 context.getEnv().submitThreadLocal(context.getThreads(), new ThreadLocalAction(true, false) {
                     @Override
                     protected void perform(ThreadLocalAction.Access access) {
-                        dumpTraceback(fd);
+                        dumpTraceback(language, newRawFdPrintWriter(fd));
                     }
                 });
             } else {
-                if (PythonOptions.isPExceptionWithJavaStacktrace(language)) {
-                    err.println();
-                    err.println(Thread.currentThread());
-                    for (StackTraceElement el : Thread.currentThread().getStackTrace()) {
-                        err.println(el);
-                    }
-                }
-                dumpTraceback(fd);
+                dumpTraceback(language, newRawFdPrintWriter(fd));
             }
             // Keep the file object alive to make sure the fd doesn't get closed
             Reference.reachabilityFence(fileObj);
@@ -255,6 +241,62 @@ public final class FaulthandlerModuleBuiltins extends PythonBuiltins {
         }
     }
 
+    @Builtin(name = "_sigsegv", minNumOfPositionalArgs = 0, parameterNames = {"release_gil"})
+    @ArgumentClinic(name = "release_gil", conversion = ArgumentClinic.ClinicConversion.Boolean, defaultValue = "false")
+    @GenerateNodeFactory
+    abstract static class SigSegvNode extends PythonUnaryClinicBuiltinNode {
+        @Specialization
+        static PNone doIt(VirtualFrame frame, boolean releaseGil,
+                        @Bind PythonContext context,
+                        @Bind Node inliningTarget,
+                        @CachedLibrary("context.getPosixSupport()") PosixSupportLibrary posixLib,
+                        @Cached GilNode gil,
+                        @Cached PConstructAndRaiseNode.Lazy constructAndRaiseNode) {
+            return raiseFatalSignal(frame, context, inliningTarget, posixLib, gil, constructAndRaiseNode, "SEGV", releaseGil);
+        }
+
+        @Override
+        protected ArgumentClinicProvider getArgumentClinic() {
+            return FaulthandlerModuleBuiltinsClinicProviders.SigSegvNodeClinicProviderGen.INSTANCE;
+        }
+    }
+
+    @Builtin(name = "_sigabrt", minNumOfPositionalArgs = 0)
+    @GenerateNodeFactory
+    abstract static class SigAbrtNode extends PythonBuiltinNode {
+        @Specialization
+        static PNone doIt(VirtualFrame frame,
+                        @Bind PythonContext context,
+                        @Bind Node inliningTarget,
+                        @CachedLibrary("context.getPosixSupport()") PosixSupportLibrary posixLib,
+                        @Cached GilNode gil,
+                        @Cached PConstructAndRaiseNode.Lazy constructAndRaiseNode) {
+            return raiseFatalSignal(frame, context, inliningTarget, posixLib, gil, constructAndRaiseNode, "ABRT", false);
+        }
+    }
+
+    private static PNone raiseFatalSignal(VirtualFrame frame, PythonContext context, Node inliningTarget, PosixSupportLibrary posixLib, GilNode gil,
+                    PConstructAndRaiseNode.Lazy constructAndRaiseNode, String signalName, boolean releaseGil) {
+        try {
+            int signum = SignalModuleBuiltins.signalFromName(context, signalName);
+            if (releaseGil) {
+                gil.release(true);
+            }
+            try {
+                posixLib.signalSelf(context.getPosixSupport(), signum);
+            } finally {
+                if (releaseGil) {
+                    gil.acquire();
+                }
+            }
+        } catch (PosixException e) {
+            throw constructAndRaiseNode.get(inliningTarget).raiseOSErrorFromPosixException(frame, e);
+        } catch (UnsupportedPosixFeatureException e) {
+            throw constructAndRaiseNode.get(inliningTarget).raiseOSErrorUnsupported(frame, e);
+        }
+        return PNone.NONE;
+    }
+
     @Builtin(name = "dump_traceback_later", minNumOfPositionalArgs = 2, declaresExplicitSelf = true, parameterNames = {"$mod", "timeout", "repeat", "file", "exit"})
     @ArgumentClinic(name = "repeat", conversion = ArgumentClinic.ClinicConversion.IntToBoolean, defaultValue = "false")
     @ArgumentClinic(name = "exit", conversion = ArgumentClinic.ClinicConversion.IntToBoolean, defaultValue = "false")
@@ -282,7 +324,9 @@ public final class FaulthandlerModuleBuiltins extends PythonBuiltins {
                 do {
                     sleepInterruptibly(inliningTarget, timeoutNs);
                     long timeoutS = timeoutNs / 1_000_000_000;
-                    newRawFdPrintWriter(fd).printf("Timeout (%d:%02d:%02d)!%n", timeoutS / 3600, timeoutS / 60, timeoutS);
+                    PrintWriter timeoutWriter = newRawFdPrintWriter(fd);
+                    timeoutWriter.printf("Timeout (%d:%02d:%02d)!%n", timeoutS / 3600, timeoutS / 60, timeoutS);
+                    timeoutWriter.flush();
                     try {
                         DumpTracebackNode.dump(context.getLanguage(), context, fd, fileObj, true);
                         if (exit) {
@@ -309,31 +353,40 @@ public final class FaulthandlerModuleBuiltins extends PythonBuiltins {
 
     private static class RawFdOutputStream extends OutputStream {
         private final int fd;
+        private final ByteArrayBuilder bb;
 
         private RawFdOutputStream(int fd) {
             this.fd = fd;
+            this.bb = new ByteArrayBuilder();
         }
 
         @Override
         public void write(byte[] bytes, int off, int len) {
             if (off != 0 || len != bytes.length) {
-                bytes = Arrays.copyOfRange(bytes, off, off + len);
-            }
-            try {
-                PosixSupportLibrary.getUncached().write(PythonContext.get(null).getPosixSupport(), fd, PosixSupportLibrary.Buffer.wrap(bytes));
-            } catch (PosixSupportLibrary.PosixException e) {
-                // Ignore
+                bb.add(Arrays.copyOfRange(bytes, off, off + len), len);
+            } else {
+                bb.add(bytes, len);
             }
         }
 
         @Override
         public void write(int b) {
-            write(new byte[]{(byte) b}, 0, 0);
+            bb.add((byte) b);
+        }
+
+        @Override
+        public void flush() throws IOException {
+            super.flush();
+            try {
+                PosixSupportLibrary.getUncached().write(PythonContext.get(null).getPosixSupport(), fd, PosixSupportLibrary.Buffer.wrap(bb.toArray()));
+            } catch (PosixSupportLibrary.PosixException e) {
+                // Ignore
+            }
         }
     }
 
     private static PrintWriter newRawFdPrintWriter(int fd) {
-        return new PrintWriter(new RawFdOutputStream(fd), true, StandardCharsets.US_ASCII);
+        return new PrintWriter(new RawFdOutputStream(fd), false, StandardCharsets.US_ASCII);
     }
 
     private static void sleepInterruptibly(Node inliningTarget, long timeoutNs) {

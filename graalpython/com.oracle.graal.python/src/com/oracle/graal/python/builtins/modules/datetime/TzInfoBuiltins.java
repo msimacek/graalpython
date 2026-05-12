@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,16 +40,38 @@
  */
 package com.oracle.graal.python.builtins.modules.datetime;
 
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.NotImplementedError;
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ValueError;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.NULLPTR;
+import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE__;
+import static com.oracle.graal.python.nodes.SpecialMethodNames.T___GETINITARGS__;
+import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
+
+import java.lang.ref.Reference;
+import java.util.List;
+
 import com.oracle.graal.python.PythonLanguage;
-import com.oracle.graal.python.annotations.Slot;
 import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.cext.capi.CApiContext;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionInvoker;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionNodes.PyObjectCheckFunctionResultNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.NativeCAPISymbol;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTiming;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.NativeToPythonTransferNode;
 import com.oracle.graal.python.builtins.objects.function.PKeyword;
 import com.oracle.graal.python.builtins.objects.type.TpSlots;
+import com.oracle.graal.python.builtins.objects.type.TypeNodes;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes.GetInstanceShape;
+import com.oracle.graal.python.lib.PyDateTimeCheckNode;
 import com.oracle.graal.python.lib.PyObjectCallMethodObjArgs;
 import com.oracle.graal.python.lib.PyObjectGetStateNode;
 import com.oracle.graal.python.lib.PyObjectLookupAttr;
@@ -61,26 +83,17 @@ import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.object.GetClassNode;
+import com.oracle.graal.python.runtime.IndirectCallData.BoundaryCallData;
+import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.Cached.Exclusive;
-import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
-
-import java.util.List;
-
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.NotImplementedError;
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ValueError;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.T___GETINITARGS__;
-import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
 @CoreFunctions(extendClasses = {PythonBuiltinClassType.PTzInfo, PythonBuiltinClassType.PTimezone})
 public final class TzInfoBuiltins extends PythonBuiltins {
@@ -91,14 +104,33 @@ public final class TzInfoBuiltins extends PythonBuiltins {
         return TzInfoBuiltinsFactory.getFactories();
     }
 
-    @Slot(value = Slot.SlotKind.tp_new, isComplex = true)
-    @Slot.SlotSignature(name = "datetime.tzinfo", minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "datetime.tzinfo", minNumOfPositionalArgs = 1, takesVarArgs = true, takesVarKeywordArgs = true)
     @GenerateNodeFactory
     public abstract static class NewNode extends PythonBuiltinNode {
+        private static final CApiTiming C_API_TIMING = CApiTiming.create(true, NativeCAPISymbol.FUN_PY_TYPE_GENERIC_NEW);
 
         @Specialization
-        static PTzInfo newTzInfo(Object cls, Object[] arguments, PKeyword[] keywords) {
-            return new PTzInfo(cls, GetInstanceShape.executeUncached(cls));
+        static Object newTzInfo(Object cls, Object[] arguments, PKeyword[] keywords,
+                        @Bind Node inliningTarget,
+                        @Cached GetInstanceShape getInstanceShape,
+                        @Cached TypeNodes.NeedsNativeAllocationNode needsNativeAllocationNode) {
+            if (!needsNativeAllocationNode.execute(inliningTarget, cls)) {
+                return new PTzInfo(cls, getInstanceShape.execute(cls));
+            } else {
+                CApiTransitions.PythonToNativeNode toNative = CApiTransitions.PythonToNativeNode.getUncached();
+                long clsPointer = toNative.executeLong(cls);
+                try {
+                    PythonContext context = PythonContext.get(inliningTarget);
+                    var callable = CApiContext.getNativeSymbol(inliningTarget, NativeCAPISymbol.FUN_PY_TYPE_GENERIC_NEW);
+                    long nativeResult = ExternalFunctionInvoker.invokePY_TYPE_GENERIC_NEW(null, C_API_TIMING,
+                                    context.ensureNativeContext(), BoundaryCallData.getUncached(),
+                                    context.getThreadState(context.getLanguage(inliningTarget)), callable, clsPointer, NULLPTR, NULLPTR);
+                    return PyObjectCheckFunctionResultNode.executeUncached(NativeCAPISymbol.FUN_PY_TYPE_GENERIC_NEW.getTsName(), NativeToPythonTransferNode.executeRawUncached(nativeResult));
+                } finally {
+                    Reference.reachabilityFence(cls);
+                }
+            }
         }
     }
 
@@ -155,13 +187,19 @@ public final class TzInfoBuiltins extends PythonBuiltins {
         private static final TruffleString T_DST = tsLiteral("dst");
 
         @Specialization
-        static Object fromUtc(VirtualFrame frame, PTzInfo self, PDateTime dateTime,
+        static Object fromUtc(VirtualFrame frame, Object self, Object dateTime,
                         @Bind Node inliningTarget,
+                        @Cached PyDateTimeCheckNode dateTimeCheckNode,
+                        @Cached DateTimeNodes.TzInfoNode tzInfoNode,
                         @Cached PyObjectCallMethodObjArgs callMethodObjArgs,
-                        @Cached @Exclusive PRaiseNode raiseNode,
+                        @Cached PRaiseNode raiseNode,
                         @Cached TimeDeltaNodes.NewNode newTimeDeltaNode,
                         @Cached DateTimeNodes.SubclassNewNode dateTimeSubclassNewNode) {
-            if (dateTime.tzInfo != self) {
+            if (!dateTimeCheckNode.execute(inliningTarget, dateTime)) {
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.FROMUTC_ARGUMENT_MUST_BE_A_DATETIME);
+            }
+            Object tzInfo = tzInfoNode.execute(inliningTarget, dateTime);
+            if (tzInfo != self) {
                 throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.FROMUTC_DT_TZINFO_IS_NOT_SELF);
             }
 
@@ -179,8 +217,7 @@ public final class TzInfoBuiltins extends PythonBuiltins {
             PTimeDelta dst = (PTimeDelta) dstObject;
 
             // calculate `offset - dst` (that's standard utc offset)
-            PTimeDelta offsetStandard = newTimeDeltaNode.execute(inliningTarget,
-                            PythonBuiltinClassType.PTimeDelta,
+            PTimeDelta offsetStandard = newTimeDeltaNode.executeBuiltin(inliningTarget,
                             offset.days - dst.days,
                             offset.seconds - dst.seconds,
                             offset.microseconds - dst.microseconds,
@@ -191,7 +228,7 @@ public final class TzInfoBuiltins extends PythonBuiltins {
 
             Object dateTimeInTimeZone = DatetimeModuleBuiltins.addOffsetToDateTime(dateTime, offsetStandard, dateTimeSubclassNewNode, inliningTarget);
 
-            if (dateTime.tzInfo == null) {
+            if (tzInfo == null) {
                 throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.FROMUTC_TZ_DST_GAVE_INCONSISTENT_RESULT_CANNOT_CONVERT);
             }
 
@@ -204,15 +241,8 @@ public final class TzInfoBuiltins extends PythonBuiltins {
             if (dstNew.isZero()) {
                 return dateTimeInTimeZone;
             } else {
-                return DatetimeModuleBuiltins.addOffsetToDateTime((PDateTime) dateTimeInTimeZone, dstNew, dateTimeSubclassNewNode, inliningTarget);
+                return DatetimeModuleBuiltins.addOffsetToDateTime(dateTimeInTimeZone, dstNew, dateTimeSubclassNewNode, inliningTarget);
             }
-        }
-
-        @Fallback
-        static Object fromUtc(Object self, Object dateTimeObject,
-                        @Bind Node inliningTarget,
-                        @Cached @Exclusive PRaiseNode raiseNode) {
-            throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.FROMUTC_ARGUMENT_MUST_BE_A_DATETIME);
         }
     }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2014, Regents of the University of California
  *
  * All rights reserved.
@@ -35,7 +35,6 @@ import static com.oracle.graal.python.nodes.StringLiterals.T_EMPTY_PARENS;
 import static com.oracle.graal.python.nodes.StringLiterals.T_LPAREN;
 import static com.oracle.graal.python.nodes.StringLiterals.T_RPAREN;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
-import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
 import java.util.List;
@@ -90,6 +89,7 @@ import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonQuaternaryClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
+import com.oracle.graal.python.nodes.object.BuiltinClassProfiles;
 import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.graal.python.runtime.exception.PythonErrorType;
 import com.oracle.graal.python.runtime.object.PFactory;
@@ -113,6 +113,7 @@ import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.api.strings.TruffleStringBuilder;
+import com.oracle.truffle.api.strings.TruffleStringBuilderUTF32;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PTuple)
 public final class TupleBuiltins extends PythonBuiltins {
@@ -129,50 +130,29 @@ public final class TupleBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     public abstract static class TupleNode extends PythonBinaryBuiltinNode {
 
-        @Specialization(guards = "isBuiltinTupleType(cls)")
-        static Object doBuiltin(VirtualFrame frame, @SuppressWarnings("unused") Object cls, Object iterable,
-                        @Shared @Cached TupleNodes.ConstructTupleNode constructTupleNode) {
-            return constructTupleNode.execute(frame, iterable);
-        }
-
-        @Specialization(guards = "!needsNativeAllocationNode.execute(inliningTarget, cls)", replaces = "doBuiltin")
-        static PTuple constructTuple(VirtualFrame frame, Object cls, Object iterable,
-                        @SuppressWarnings("unused") @Bind Node inliningTarget,
-                        @SuppressWarnings("unused") @Shared @Cached TypeNodes.NeedsNativeAllocationNode needsNativeAllocationNode,
-                        @Shared @Cached TupleNodes.ConstructTupleNode constructTupleNode,
-                        @Cached TypeNodes.IsSameTypeNode isSameTypeNode,
-                        @Cached TypeNodes.GetInstanceShape getInstanceShape) {
-            PTuple tuple = constructTupleNode.execute(frame, iterable);
-            if (isSameTypeNode.execute(inliningTarget, cls, PythonBuiltinClassType.PTuple)) {
-                return tuple;
+        @Specialization
+        static Object doGeneric(VirtualFrame frame, Object cls, Object iterable,
+                        @Bind Node inliningTarget,
+                        @Cached TypeNodes.NeedsNativeAllocationNode needsNativeAllocationNode,
+                        @Cached TupleNodes.ConstructTupleNode constructTupleNode,
+                        @Cached BuiltinClassProfiles.IsBuiltinClassExactProfile exactClassProfile,
+                        @Cached IsSubtypeNode subtypeNode,
+                        @Cached TypeNodes.GetInstanceShape getInstanceShape,
+                        @Cached CExtNodes.TupleSubtypeNew subtypeNew,
+                        @Cached PRaiseNode raiseNode) {
+            if (exactClassProfile.profileClass(inliningTarget, cls, PythonBuiltinClassType.PTuple)) {
+                return constructTupleNode.execute(frame, iterable);
+            } else if (subtypeNode.execute(cls, PythonBuiltinClassType.PTuple)) {
+                if (needsNativeAllocationNode.execute(inliningTarget, cls)) {
+                    // delegate to tuple_subtype_new(PyTypeObject *type, PyObject *x)
+                    return subtypeNew.execute(inliningTarget, cls, iterable);
+                } else {
+                    PTuple tuple = constructTupleNode.execute(frame, iterable);
+                    return PFactory.createTuple(cls, getInstanceShape.execute(cls), tuple.getSequenceStorage());
+                }
             } else {
-                return PFactory.createTuple(cls, getInstanceShape.execute(cls), tuple.getSequenceStorage());
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.IS_NOT_TYPE_OBJ, "'cls'", cls);
             }
-        }
-
-        // delegate to tuple_subtype_new(PyTypeObject *type, PyObject *x)
-        @Specialization(guards = {"needsNativeAllocationNode.execute(inliningTarget, cls)", "isSubtypeOfTuple( isSubtype, cls)"}, limit = "1")
-        @InliningCutoff
-        static Object doNative(@SuppressWarnings("unused") VirtualFrame frame, Object cls, Object iterable,
-                        @SuppressWarnings("unused") @Bind Node inliningTarget,
-                        @SuppressWarnings("unused") @Shared @Cached TypeNodes.NeedsNativeAllocationNode needsNativeAllocationNode,
-                        @Cached @SuppressWarnings("unused") IsSubtypeNode isSubtype,
-                        @Cached CExtNodes.TupleSubtypeNew subtypeNew) {
-            return subtypeNew.call(cls, iterable);
-        }
-
-        protected static boolean isBuiltinTupleType(Object cls) {
-            return cls == PythonBuiltinClassType.PTuple;
-        }
-
-        protected static boolean isSubtypeOfTuple(IsSubtypeNode isSubtypeNode, Object cls) {
-            return isSubtypeNode.execute(cls, PythonBuiltinClassType.PTuple);
-        }
-
-        @Fallback
-        static PTuple tupleObject(Object cls, @SuppressWarnings("unused") Object arg,
-                        @Bind Node inliningTarget) {
-            throw PRaiseNode.raiseStatic(inliningTarget, TypeError, ErrorMessages.IS_NOT_TYPE_OBJ, "'cls'", cls);
         }
     }
 
@@ -288,7 +268,7 @@ public final class TupleBuiltins extends PythonBuiltins {
                 return T_ELLIPSIS_IN_PARENS;
             }
             try {
-                TruffleStringBuilder buf = TruffleStringBuilder.create(TS_ENCODING);
+                TruffleStringBuilderUTF32 buf = TruffleStringBuilder.createUTF32();
                 appendStringNode.execute(buf, T_LPAREN);
                 for (int i = 0; i < len - 1; i++) {
                     appendStringNode.execute(buf, toString(frame, inliningTarget, getItemNode.execute(tupleStore, i), reprNode));

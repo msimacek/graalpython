@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -83,6 +83,11 @@ def _reference_set_item(args):
         return 0
     except:
         raise SystemError
+
+
+def _reference_setdefault(args):
+    d, key, default = args
+    return d.setdefault(key, default), d
 
 
 def _reference_del_item(args):
@@ -307,7 +312,7 @@ class TestPyDict(CPyExtTestCase):
     # PyDict_Next
     test_PyDict_Next = CPyExtFunctionOutVars(
         _reference_next,
-        lambda: (({'a': "hello"}, 1), ({'a': "hello"}, 0), ({'a': "hello", 'b': 'world'}, 1), ({'a': "hello"}, 1)),
+        lambda: (({'a': "hello"}, 1), ({'a': "hello"}, 0), ({'a': "hello", 'b': 'world'}, 1), ({'a': "hello"}, 1), ({True: False}, 0)),
         code='''int wrap_PyDict_Next(PyObject* dict, Py_ssize_t* ppos, PyObject** key, PyObject** value) {
             int res = 0;
             Py_ssize_t iterations = *ppos;
@@ -358,6 +363,30 @@ class TestPyDict(CPyExtTestCase):
         argspec='O',
         arguments=["PyObject* dict"],
         callfunction="wrap__PyDict_SetItem_KnownHash",
+    )
+
+    # PyDict_SetDefault
+    test_PyDict_SetDefault = CPyExtFunction(
+        _reference_setdefault,
+        lambda: (
+            ({}, 1, 2),
+            ({1: 3}, 1, 2),
+            ({}, "a", "hello"),
+            ({"a": "existing"}, "a", "default"),
+        ),
+        code='''PyObject* wrap_PyDict_SetDefault(PyObject* dict, PyObject* key, PyObject* deflt) {
+            PyObject* result = PyDict_SetDefault(dict, key, deflt);
+            if (result == NULL) {
+                return NULL;
+            }
+            Py_INCREF(result);
+            return Py_BuildValue("NN", result, Py_NewRef(dict));
+        }''',
+        resultspec="O",
+        argspec='OOO',
+        arguments=("PyObject* dict", "PyObject* key", "PyObject* deflt"),
+        callfunction="wrap_PyDict_SetDefault",
+        cmpfunc=unhandled_error_compare
     )
 
     # PyDict_Size

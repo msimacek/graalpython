@@ -5,61 +5,58 @@ on:
   workflow_dispatch:
 
 jobs:
-  downstream-tests:
-    strategy:
-      fail-fast: false
-      matrix:
-        name:
-        - pybind11
-        - virtualenv
-        - pyo3
-        - pydantic-core
-        - jiter
-        os:
-        - id: ubuntu-latest
-          platform: linux
-          arch: amd64
-        - id: macos-latest
-          platform: darwin
-          arch: aarch64
 
-    runs-on: ${{ matrix.os.id }}
+  build-standalone-artifacts:
+    uses: ./.github/workflows/ci-matrix-gen.yml
+    with:
+      jobs_to_run: ^(?=.*python-svm-build-gate-linux-amd64).*$
+      logs_retention_days: 0
+      artifacts_retention_days: 0
 
-    steps:
-    - name: Install CMake (Linux)
-      if: ${{ matrix.os.platform == 'linux' && matrix.name == 'pybind11' }}
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake
+  downstream-pybind11:
+    needs: build-standalone-artifacts
+    uses: ./.github/workflows/_downstream-test-common.yml
+    with:
+      package: pybind11
+      needs_cmake: true
 
-    - name: Install CMake (Darwin)
-      if: ${{ matrix.os.platform == 'darwin' && matrix.name == 'pybind11' }}
-      run: |
-        if brew list cmake >/dev/null 2>&1; then
-          echo "cmake already installed"
-        else
-          brew install cmake
-        fi
+  downstream-virtualenv:
+    needs: build-standalone-artifacts
+    uses: ./.github/workflows/_downstream-test-common.yml
+    with:
+      package: virtualenv
 
-    - name: Install Rust toolchain
-      if: ${{ matrix.name == 'pyo3' || matrix.name == 'pydantic-core' || matrix.name == 'jiter' }}
-      run: |
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-        echo "${HOME}/.cargo/bin" >> $GITHUB_PATH
+  downstream-pyo3:
+    needs: build-standalone-artifacts
+    uses: ./.github/workflows/_downstream-test-common.yml
+    with:
+      package: pyo3
+      needs_rust: true
 
-    - name: Install uv
-      if: ${{ matrix.name == 'pydantic-core' }}
-      run: |
-        curl -LsSf https://astral.sh/uv/install.sh | sh
-        echo "$HOME/.local/bin" >> $GITHUB_PATH
+  downstream-pydantic-core:
+    needs: build-standalone-artifacts
+    uses: ./.github/workflows/_downstream-test-common.yml
+    with:
+      package: pydantic-core
+      needs_rust: true
+      needs_uv: true
 
-    - name: Checkout main repository
-      uses: actions/checkout@v4
+  downstream-jiter:
+    needs: build-standalone-artifacts
+    uses: ./.github/workflows/_downstream-test-common.yml
+    with:
+      package: jiter
+      needs_rust: true
+      needs_uv: true
 
-    - name: Get GraalPy EA build
-      run: |
-        tarball="$(curl -sfL https://raw.githubusercontent.com/graalvm/graal-languages-ea-builds/refs/heads/main/graalpy/versions/latest-native-${{ matrix.os.platform }}-${{ matrix.os.arch}}.url)"
-        curl -sfL "$tarball" | tar xz
+  downstream-cython:
+    needs: build-standalone-artifacts
+    uses: ./.github/workflows/_downstream-test-common.yml
+    with:
+      package: cython
 
-    - name: Run downstream tests for ${{ matrix.name }}
-      run: python mx.graalpython/downstream_tests.py graalpy-*/bin/python ${{ matrix.name }}
+  downstream-oracledb:
+    needs: build-standalone-artifacts
+    uses: ./.github/workflows/_downstream-test-oracledb.yml
+    with:
+      package: oracledb

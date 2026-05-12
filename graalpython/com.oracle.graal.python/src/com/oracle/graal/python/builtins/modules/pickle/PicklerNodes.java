@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2024, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -152,8 +152,9 @@ public final class PicklerNodes {
         @Child private BytesNodes.ToBytesNode toBytesNode;
         @Child private PyObjectReprAsTruffleStringNode reprNode;
         @Child private TruffleString.FromByteArrayNode tsFromByteArrayNode;
+        @Child private TruffleString.FromByteArrayWithCompactionUTF32Node tsFromByteArrayWithCompactionNode;
         @Child private TruffleString.CodePointLengthNode tsCodePointLengthNode;
-        @Child private TruffleString.CodePointAtIndexNode tsCodePointAtIndexNode;
+        @Child private TruffleString.CodePointAtIndexUTF32Node tsCodePointAtIndexUTF32Node;
         @Child private TruffleString.FromLongNode tsFromLongNode;
         @Child private TruffleString.IndexOfStringNode tsIndexOfStringNode;
         @Child private TruffleString.SubstringNode tsSubstringNode;
@@ -190,6 +191,14 @@ public final class PicklerNodes {
             return tsFromByteArrayNode;
         }
 
+        protected TruffleString.FromByteArrayWithCompactionUTF32Node ensureTsFromByteArrayWithCompaction() {
+            if (tsFromByteArrayWithCompactionNode == null) {
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+                tsFromByteArrayWithCompactionNode = insert(TruffleString.FromByteArrayWithCompactionUTF32Node.create());
+            }
+            return tsFromByteArrayWithCompactionNode;
+        }
+
         protected TruffleString.CodePointLengthNode ensureTsCodePointLengthNode() {
             if (tsCodePointLengthNode == null) {
                 CompilerDirectives.transferToInterpreterAndInvalidate();
@@ -198,12 +207,12 @@ public final class PicklerNodes {
             return tsCodePointLengthNode;
         }
 
-        protected TruffleString.CodePointAtIndexNode ensureTsCodePointAtIndexNode() {
-            if (tsCodePointAtIndexNode == null) {
+        protected TruffleString.CodePointAtIndexUTF32Node ensureTsCodePointAtIndexUTF32Node() {
+            if (tsCodePointAtIndexUTF32Node == null) {
                 CompilerDirectives.transferToInterpreterAndInvalidate();
-                tsCodePointAtIndexNode = insert(TruffleString.CodePointAtIndexNode.create());
+                tsCodePointAtIndexUTF32Node = insert(TruffleString.CodePointAtIndexUTF32Node.create());
             }
-            return tsCodePointAtIndexNode;
+            return tsCodePointAtIndexUTF32Node;
         }
 
         protected TruffleString.FromLongNode ensureTsFromLongNode() {
@@ -326,12 +335,12 @@ public final class PicklerNodes {
             return isIteratorObjectNode.executeCached(iter);
         }
 
-        protected Object encode(Object value, TruffleString encoding, TruffleString errors) {
+        protected Object encode(VirtualFrame frame, Object value, TruffleString encoding, TruffleString errors) {
             if (codecsEncodeNode == null) {
                 CompilerDirectives.transferToInterpreterAndInvalidate();
                 codecsEncodeNode = insert(CodecsModuleBuiltinsFactory.CodecsEncodeNodeFactory.create());
             }
-            return codecsEncodeNode.execute(value, encoding, errors);
+            return codecsEncodeNode.execute(frame, value, encoding, errors);
         }
 
         private CodecsModuleBuiltins.CodecsDecodeNode ensureCodecsDecodeNode() {

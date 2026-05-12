@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,6 +42,7 @@ package com.oracle.graal.python.builtins.objects.iterator;
 
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.PIterator;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ValueError;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.T___LENGTH_HINT__;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 
@@ -56,6 +57,7 @@ import com.oracle.graal.python.builtins.objects.common.SequenceNodes.GetSequence
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.iterator.IteratorNodesFactory.GetInternalIteratorSequenceStorageNodeGen;
+import com.oracle.graal.python.builtins.objects.iterator.IteratorNodesFactory.GetLengthNodeGen;
 import com.oracle.graal.python.builtins.objects.list.PList;
 import com.oracle.graal.python.builtins.objects.set.PSet;
 import com.oracle.graal.python.builtins.objects.str.PString;
@@ -111,10 +113,16 @@ public abstract class IteratorNodes {
      */
     @GenerateInline
     @GenerateCached(false)
+    @GenerateUncached
     @ImportStatic({PGuards.class, SpecialMethodNames.class})
     public abstract static class GetLength extends PNodeWithContext {
 
         public abstract int execute(VirtualFrame frame, Node inliningTarget, Object iterable);
+
+        @TruffleBoundary
+        public static int executeUncached(Object iterable) {
+            return GetLengthNodeGen.getUncached().execute(null, null, iterable);
+        }
 
         // Note: these fast-paths are duplicated in PyObjectSizeNode, because there is no simple
         // way to share them effectively without unnecessary indirections and overhead in the
@@ -202,7 +210,7 @@ public abstract class IteratorNodes {
                     if (indexCheckNode.execute(inliningTarget, len)) {
                         int intLen = asSizeNode.executeExact(frame, inliningTarget, len);
                         if (intLen < 0) {
-                            throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.LENGTH_HINT_SHOULD_RETURN_MT_ZERO);
+                            throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.LENGTH_HINT_SHOULD_RETURN_MT_ZERO);
                         }
                         return intLen;
                     } else {

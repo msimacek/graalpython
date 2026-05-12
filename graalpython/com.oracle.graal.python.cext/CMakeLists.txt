@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2023, 2025, Oracle and/or its affiliates.
+# Copyright (c) 2023, 2026, Oracle and/or its affiliates.
 #
 # All rights reserved.
 #
@@ -36,8 +36,16 @@ function(require_var var)
 endfunction()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-add_custom_target(compile_commands_target ALL
-  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_BINARY_DIR}/compile_commands.json" "${CMAKE_SOURCE_DIR}")
+
+execute_process(COMMAND ${CMAKE_COMMAND} -E touch "${CMAKE_SOURCE_DIR}/.compile_commands.json.probe" RESULT_VARIABLE _touch_res)
+if(_touch_res EQUAL 0)
+    file(REMOVE "${CMAKE_SOURCE_DIR}/.compile_commands.json.probe")
+    add_custom_target(compile_commands_target ALL
+        COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_BINARY_DIR}/compile_commands.json" "${CMAKE_SOURCE_DIR}")
+else()
+    message(STATUS "Source directory is not writable, skipping copy of compile_commands.json.")
+    add_custom_target(compile_commands_target)
+endif()
 
 require_var(GRAALPY_PARENT_DIR)
 require_var(CAPI_INC_DIR)
@@ -154,7 +162,7 @@ set(SRC_FILES ${CAPI_SRC}/codecs.c ${CAPI_SRC}/setobject.c ${CAPI_SRC}/compile.c
               ${CAPI_SRC}/fileobject.c ${CAPI_SRC}/pystrcmp.c ${CAPI_SRC}/getversion.c
               ${CAPI_SRC}/genobject.c ${CAPI_SRC}/methodobject.c ${CAPI_SRC}/boolobject.c ${CAPI_SRC}/pylifecycle.c
               ${CAPI_SRC}/errors.c ${CAPI_SRC}/signals.c ${CAPI_SRC}/datetime.c ${CAPI_SRC}/call.c
-              ${CAPI_SRC}/getargs.c ${CAPI_SRC}/tracemalloc.c ${CAPI_SRC}/initconfig.c
+              ${CAPI_SRC}/getargs.c ${CAPI_SRC}/tracemalloc.c ${CAPI_SRC}/initconfig.c ${CAPI_SRC}/graalpy_stacktrace.c
 )
 
 file(GLOB_RECURSE ACTUAL_SRC_FILES
@@ -362,6 +370,9 @@ target_compile_definitions(${TARGET_PYEXPAT} PRIVATE
 
 ###################### CTYPES ######################
 native_module("_ctypes_test" TRUE "${SRC_DIR}/modules/_ctypes/_ctypes_test.c")
+if(WIN32)
+    target_compile_definitions("_ctypes_test" PRIVATE MS_WIN32 MS_WINDOWS)
+endif()
 set(CTYPES_SRC
     "${SRC_DIR}/modules/_ctypes/_ctypes.c"
     "${SRC_DIR}/modules/_ctypes/callbacks.c"
@@ -374,6 +385,9 @@ if(APPLE)
     set(CTYPES_SRC ${CTYPES_SRC} "${SRC_DIR}/modules/_ctypes/malloc_closure.c")
 endif()
 native_module("_ctypes" TRUE "${CTYPES_SRC}")
+if(WIN32)
+    target_compile_definitions("_ctypes" PRIVATE MS_WIN32 MS_WINDOWS)
+endif()
 target_include_directories("_ctypes" PUBLIC "${SRC_DIR}/modules/_ctypes")
 find_library(FFI_LIBRARY
   NAMES "ffi.lib" "libffi.a"
@@ -446,6 +460,7 @@ if(WIN32)
     if (NOT MSVC)
         target_compile_options(${TARGET_LIBPYTHON} PRIVATE "-fmsc-version=1920")
     endif()
+    target_link_libraries(${TARGET_LIBPYTHON} dbghelp)
 else()
     # Link to math library; required for functions like 'hypot' or similar
     target_link_libraries(${TARGET_LIBPYTHON} m)

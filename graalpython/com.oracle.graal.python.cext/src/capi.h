@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -65,6 +65,12 @@
 #error "don't know how to declare thread local variable"
 #endif
 
+typedef int (*graalpy_attach_native_thread_func)(void);
+typedef void (*graalpy_detach_native_thread_func)(void);
+
+extern graalpy_attach_native_thread_func graalpy_attach_native_thread;
+extern graalpy_detach_native_thread_func graalpy_detach_native_thread;
+
 #ifdef MS_WINDOWS
 // define the below, otherwise windows' sdk defines complex to _complex and breaks us
 #define _COMPLEX_DEFINED
@@ -86,16 +92,6 @@
 #include "graalpy/handles.h"
 
 #define SRC_CS "utf-8"
-
-/* Flags definitions representing global (debug) options. */
-#define PY_TRUFFLE_TRACE_MEM 0x1
-#define PY_TRUFFLE_LOG_INFO 0x2
-#define PY_TRUFFLE_LOG_CONFIG 0x4
-#define PY_TRUFFLE_LOG_FINE 0x8
-#define PY_TRUFFLE_LOG_FINER 0x10
-#define PY_TRUFFLE_LOG_FINEST 0x20
-#define PY_TRUFFLE_DEBUG_CAPI 0x40
-#define PY_TRUFFLE_PYTHON_GC 0x80
 
 typedef struct mmap_object mmap_object;
 typedef struct _gc_runtime_state GCState; // originally in 'gcmodule.c'
@@ -145,6 +141,16 @@ typedef struct {
     double ob_fval;
 } GraalPyFloatObject;
 
+typedef struct {
+    GraalPyObject ob_base;
+    Py_ssize_t length;
+    Py_ssize_t byte_length;
+    Py_hash_t hash;
+    /* Bits 0-2: kind; bit 3: is_ascii; bits 4-5: interned state. */
+    uint64_t state;
+    void *data;
+} GraalPyUnicodeObject;
+
 typedef struct gc_generation GCGeneration;
 
 // {{start CAPI_BUILTINS}}
@@ -166,19 +172,14 @@ extern THREAD_LOCAL Py_LOCAL_SYMBOL PyThreadState *tstate_current;
 extern Py_LOCAL_SYMBOL int8_t *_graalpy_finalizing;
 #define graalpy_finalizing (_graalpy_finalizing != NULL && *_graalpy_finalizing)
 
+Py_LOCAL_SYMBOL void graalpy_dealloc_stack_grow(PyThreadState *tstate);
+Py_LOCAL_SYMBOL void graalpy_dealloc_stack_push(PyThreadState *tstate, PyObject *op);
+Py_LOCAL_SYMBOL void graalpy_dealloc_stack_pop(PyThreadState *tstate, PyObject *op);
+
 #if (__linux__ && __GNU_LIBRARY__)
 #include <stdlib.h>
 #include <string.h>
-#include <execinfo.h>
 #include <unistd.h>
-static void print_c_stacktrace() {
-    fprintf(stderr, "Native stacktrace:\n");
-    intptr_t stack[16];
-    size_t stack_size = backtrace((void *)stack, sizeof(stack) / sizeof(stack[0]));
-    backtrace_symbols_fd((void *)stack, stack_size, STDERR_FILENO);
-    fflush(stderr);
-}
-
 static void attach_gdb() {
     pid_t my_pid = getpid();
     char* pathname = "/bin/sh";
@@ -197,40 +198,51 @@ static void attach_gdb() {
     }
 }
 #else
-static void print_c_stacktrace() {
-    // not supported
-}
-
 static void attach_gdb() {
     // not supported
 }
 #endif
 
+size_t GraalPyPrivate_CaptureStacktrace(void **frames, size_t max_depth, size_t skip);
+void GraalPyPrivate_PrintCapturedStacktrace(FILE *file, const char *header, void *const *frames, size_t depth);
+void GraalPyPrivate_PrintCurrentStacktrace(FILE *file, const char *header, size_t max_depth, size_t skip);
+void GraalPyPrivate_LogCapturedStacktrace(int level, const char *prefix, void *const *frames, size_t depth);
+
+static void print_c_stacktrace() {
+    GraalPyPrivate_PrintCurrentStacktrace(stderr, "Native stacktrace:\n", 16, 0);
+}
+
 /* Flags definitions representing global (debug) options. */
 static MUST_INLINE int GraalPyPrivate_Trace_Memory() {
-    return Py_Truffle_Options & PY_TRUFFLE_TRACE_MEM;
+    return Py_Truffle_Options & GRAALPY_TRACE_MEM;
 }
 static MUST_INLINE int GraalPyPrivate_Log_Info() {
-    return Py_Truffle_Options & PY_TRUFFLE_LOG_INFO;
+    return Py_Truffle_Options & GRAALPY_LOG_INFO;
 }
 static MUST_INLINE int GraalPyPrivate_Log_Config() {
-    return Py_Truffle_Options & PY_TRUFFLE_LOG_CONFIG;
+    return Py_Truffle_Options & GRAALPY_LOG_CONFIG;
 }
 static MUST_INLINE int GraalPyPrivate_Log_Fine() {
-    return Py_Truffle_Options & PY_TRUFFLE_LOG_FINE;
+    return Py_Truffle_Options & GRAALPY_LOG_FINE;
 }
 static MUST_INLINE int GraalPyPrivate_Log_Finer() {
-    return Py_Truffle_Options & PY_TRUFFLE_LOG_FINER;
+    return Py_Truffle_Options & GRAALPY_LOG_FINER;
 }
 static MUST_INLINE int GraalPyPrivate_Log_Finest() {
-    return Py_Truffle_Options & PY_TRUFFLE_LOG_FINEST;
+    return Py_Truffle_Options & GRAALPY_LOG_FINEST;
 }
 static MUST_INLINE int GraalPyPrivate_Debug_CAPI() {
-    return Py_Truffle_Options & PY_TRUFFLE_DEBUG_CAPI;
+    return Py_Truffle_Options & GRAALPY_DEBUG_CAPI;
 }
 
 static MUST_INLINE int GraalPyPrivate_PythonGC() {
-    return Py_Truffle_Options & PY_TRUFFLE_PYTHON_GC;
+    return Py_Truffle_Options & GRAALPY_PYTHON_GC;
+}
+static MUST_INLINE int GraalPyPrivate_PoisonNativeMemoryOnFree() {
+    return Py_Truffle_Options & GRAALPY_POISON_NATIVE_MEMORY_ON_FREE;
+}
+static MUST_INLINE int GraalPyPrivate_SampleNativeMemoryAllocSites() {
+    return Py_Truffle_Options & GRAALPY_SAMPLE_NATIVE_MEMORY_ALLOC_SITES;
 }
 
 static void
@@ -247,79 +259,6 @@ GraalPyPrivate_Log(int level, const char *format, ...)
 }
 
 Py_LOCAL_SYMBOL int is_builtin_type(PyTypeObject *tp);
-
-
-#define JWRAPPER_DIRECT                      1
-#define JWRAPPER_FASTCALL                    2
-#define JWRAPPER_FASTCALL_WITH_KEYWORDS      3
-#define JWRAPPER_KEYWORDS                    4
-#define JWRAPPER_VARARGS                     5
-#define JWRAPPER_NOARGS                      6
-#define JWRAPPER_O                           7
-#define JWRAPPER_METHOD                      8
-#define JWRAPPER_UNSUPPORTED                 9
-#define JWRAPPER_ALLOC                       10
-#define JWRAPPER_GETATTR                     11
-#define JWRAPPER_SETATTR                     12
-#define JWRAPPER_RICHCMP                     13
-#define JWRAPPER_SETITEM                     14
-#define JWRAPPER_UNARYFUNC                   15
-#define JWRAPPER_BINARYFUNC                  16
-#define JWRAPPER_BINARYFUNC_L                17
-#define JWRAPPER_BINARYFUNC_R                18
-#define JWRAPPER_TERNARYFUNC                 19
-#define JWRAPPER_TERNARYFUNC_R               20
-#define JWRAPPER_LT                          21
-#define JWRAPPER_LE                          22
-#define JWRAPPER_EQ                          23
-#define JWRAPPER_NE                          24
-#define JWRAPPER_GT                          25
-#define JWRAPPER_GE                          26
-#define JWRAPPER_ITERNEXT                    27
-#define JWRAPPER_INQUIRY                     28
-#define JWRAPPER_DELITEM                     29
-#define JWRAPPER_GETITEM                     30
-#define JWRAPPER_GETTER                      31
-#define JWRAPPER_SETTER                      32
-#define JWRAPPER_INITPROC                    33
-#define JWRAPPER_HASHFUNC                    34
-#define JWRAPPER_CALL                        35
-#define JWRAPPER_SETATTRO                    36
-#define JWRAPPER_DESCR_GET                   37
-#define JWRAPPER_DESCR_SET                   38
-#define JWRAPPER_LENFUNC                     39
-#define JWRAPPER_OBJOBJPROC                  40
-#define JWRAPPER_OBJOBJARGPROC               41
-#define JWRAPPER_NEW                         42
-#define JWRAPPER_MP_DELITEM                  43
-#define JWRAPPER_STR                         44
-#define JWRAPPER_REPR                        45
-#define JWRAPPER_DESCR_DELETE                46
-#define JWRAPPER_DELATTRO                    47
-#define JWRAPPER_SSIZE_ARG                   48
-#define JWRAPPER_VISITPROC                   49
-#define JWRAPPER_TRAVERSEPROC                50
-
-
-static inline int get_method_flags_wrapper(int flags) {
-    if (flags < 0)
-        return JWRAPPER_DIRECT;
-    if ((flags & (METH_FASTCALL | METH_KEYWORDS | METH_METHOD)) == (METH_FASTCALL | METH_KEYWORDS | METH_METHOD))
-        return JWRAPPER_METHOD;
-    if ((flags & (METH_FASTCALL | METH_KEYWORDS)) == (METH_FASTCALL | METH_KEYWORDS))
-        return JWRAPPER_FASTCALL_WITH_KEYWORDS;
-    if (flags & METH_FASTCALL)
-        return JWRAPPER_FASTCALL;
-    if (flags & METH_KEYWORDS)
-        return JWRAPPER_KEYWORDS;
-    if (flags & METH_VARARGS)
-        return JWRAPPER_VARARGS;
-    if (flags & METH_NOARGS)
-        return JWRAPPER_NOARGS;
-    if (flags & METH_O)
-        return JWRAPPER_O;
-    return JWRAPPER_UNSUPPORTED;
-}
 
 PyAPI_FUNC(void) GraalPyPrivate_Object_GC_Del(void *op);
 

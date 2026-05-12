@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2024, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -1327,7 +1327,7 @@ public class PPickler extends PythonBuiltinObject {
                         reduceValue = createTuple(ctx.getCore().lookupType(PythonBuiltinClassType.PBytes), createTuple());
                     } else {
                         PickleState st = getGlobalState(ctx.getCore());
-                        final TruffleString unicodeStr = PickleUtils.decodeLatin1Strict(getBufferLibrary().getCopiedByteArray(buffer), ensureTsFromByteArray(), ensureTsSwitchEncodingNode());
+                        final TruffleString unicodeStr = PickleUtils.decodeLatin1Strict(getBufferLibrary().getCopiedByteArray(buffer), ensureTsFromByteArrayWithCompaction());
                         reduceValue = createTuple(st.codecsEncode, createTuple(unicodeStr, LATIN1));
                     }
                     // save_reduce() will memoize the object automatically.
@@ -1378,7 +1378,7 @@ public class PPickler extends PythonBuiltinObject {
             if (data == null) {
                 // Issue #8383: for strings with lone surrogates, fallback on the "surrogatepass"
                 // error handler.
-                encoded = getItem(frame, encode(obj, T_UTF8, T_ERRORS_SURROGATEPASS), 0);
+                encoded = getItem(frame, encode(frame, obj, T_UTF8, T_ERRORS_SURROGATEPASS), 0);
                 // Checkstyle: stop
                 //@formatter:off
                 // data = PickleUtils.encodeUTF8Strict(asStringStrict(encoded), ensureTsSwitchEncodingNode(), ensureTsCopyToByteArrayNode(), ensureTsGetCodeRangeNode());
@@ -1416,7 +1416,7 @@ public class PPickler extends PythonBuiltinObject {
             if (pickler.isBin()) {
                 writeUnicodeBinary(frame, pickler, obj);
             } else {
-                byte[] encoded = PickleUtils.rawUnicodeEscape(asStringStrict(obj), ensureTsCodePointLengthNode(), ensureTsCodePointAtIndexNode());
+                byte[] encoded = PickleUtils.rawUnicodeEscape(asStringStrict(obj), ensureTsCodePointLengthNode(), ensureTsCodePointAtIndexUTF32Node());
                 write(pickler, PickleUtils.OPCODE_UNICODE);
                 write(pickler, encoded);
                 writeASCII(pickler, T_NEWLINE);

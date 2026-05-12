@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,6 +42,7 @@ package com.oracle.graal.python.builtins.objects.complex;
 
 import static com.oracle.graal.python.builtins.objects.cext.structs.CFields.PyComplexObject__cval__imag;
 import static com.oracle.graal.python.builtins.objects.cext.structs.CFields.PyComplexObject__cval__real;
+import static com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.readDoubleField;
 import static com.oracle.graal.python.nodes.BuiltinNames.J_COMPLEX;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___COMPLEX__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___FORMAT__;
@@ -53,6 +54,7 @@ import static com.oracle.graal.python.runtime.exception.PythonErrorType.ValueErr
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.ZeroDivisionError;
 import static com.oracle.graal.python.runtime.formatting.FormattingUtils.validateForFloat;
 
+import java.lang.ref.Reference;
 import java.util.List;
 
 import com.oracle.graal.python.PythonLanguage;
@@ -70,11 +72,13 @@ import com.oracle.graal.python.builtins.modules.WarningsModuleBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.PNotImplemented;
 import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
-import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes;
-import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionNodes;
+import com.oracle.graal.python.builtins.objects.cext.capi.CApiContext;
+import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes.EnsurePythonObjectNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionInvoker;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionNodes.PyObjectCheckFunctionResultNode;
 import com.oracle.graal.python.builtins.objects.cext.capi.NativeCAPISymbol;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTiming;
 import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions;
-import com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess;
 import com.oracle.graal.python.builtins.objects.common.FormatNodeBase;
 import com.oracle.graal.python.builtins.objects.complex.ComplexBuiltinsClinicProviders.FormatNodeClinicProviderGen;
 import com.oracle.graal.python.builtins.objects.floats.FloatBuiltins;
@@ -103,6 +107,7 @@ import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.call.special.LookupAndCallUnaryNode;
+import com.oracle.graal.python.nodes.call.special.SpecialMethodNotFound;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonTernaryBuiltinNode;
@@ -111,6 +116,7 @@ import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProv
 import com.oracle.graal.python.nodes.object.BuiltinClassProfiles;
 import com.oracle.graal.python.nodes.truffle.PythonIntegerAndFloatTypes;
 import com.oracle.graal.python.nodes.util.CastToJavaStringNode;
+import com.oracle.graal.python.runtime.IndirectCallData.BoundaryCallData;
 import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.graal.python.runtime.exception.PException;
 import com.oracle.graal.python.runtime.exception.PythonErrorType;
@@ -182,10 +188,9 @@ public final class ComplexBuiltins extends PythonBuiltins {
         @Specialization(guards = "check.execute(inliningTarget, v)", limit = "1")
         @InliningCutoff
         static ComplexValue doNative(@SuppressWarnings("unused") Node inliningTarget, PythonAbstractNativeObject v,
-                        @SuppressWarnings("unused") @Cached PyComplexCheckNode check,
-                        @Cached(inline = false) CStructAccess.ReadDoubleNode read) {
-            double real = read.readFromObj(v, PyComplexObject__cval__real);
-            double imag = read.readFromObj(v, PyComplexObject__cval__imag);
+                        @SuppressWarnings("unused") @Cached PyComplexCheckNode check) {
+            double real = readDoubleField(v.getPtr(), PyComplexObject__cval__real);
+            double imag = readDoubleField(v.getPtr(), PyComplexObject__cval__imag);
             return new ComplexValue(real, imag);
         }
 
@@ -235,6 +240,8 @@ public final class ComplexBuiltins extends PythonBuiltins {
         @GenerateCached(false)
         @GenerateUncached
         abstract static class CreateComplexNode extends Node {
+            private static final CApiTiming C_API_TIMING = CApiTiming.create(true, NativeCAPISymbol.FUN_COMPLEX_SUBTYPE_FROM_DOUBLES);
+
             public abstract Object execute(Node inliningTarget, Object cls, double real, double imaginary);
 
             public static Object executeUncached(Object cls, double real, double imaginary) {
@@ -250,13 +257,23 @@ public final class ComplexBuiltins extends PythonBuiltins {
 
             @Fallback
             static Object doNative(Node inliningTarget, Object cls, double real, double imaginary,
-                            @Cached(inline = false) CExtNodes.PCallCapiFunction callCapiFunction,
                             @Cached(inline = false) CApiTransitions.PythonToNativeNode toNativeNode,
                             @Cached(inline = false) CApiTransitions.NativeToPythonTransferNode toPythonNode,
-                            @Cached(inline = false) ExternalFunctionNodes.DefaultCheckFunctionResultNode checkFunctionResultNode) {
+                            @Cached(inline = false) PyObjectCheckFunctionResultNode checkFunctionResultNode) {
                 NativeCAPISymbol symbol = NativeCAPISymbol.FUN_COMPLEX_SUBTYPE_FROM_DOUBLES;
-                Object nativeResult = callCapiFunction.call(symbol, toNativeNode.execute(cls), real, imaginary);
-                return toPythonNode.execute(checkFunctionResultNode.execute(PythonContext.get(inliningTarget), symbol.getTsName(), nativeResult));
+                // classes are always Python objects
+                assert EnsurePythonObjectNode.doesNotNeedPromotion(cls);
+                long clsPointer = toNativeNode.executeLong(cls);
+                try {
+                    PythonContext context = PythonContext.get(inliningTarget);
+                    var callable = CApiContext.getNativeSymbol(inliningTarget, symbol);
+                    long nativeResult = ExternalFunctionInvoker.invokeCOMPLEX_SUBTYPE_FROM_DOUBLES(null, C_API_TIMING,
+                                    context.ensureNativeContext(), BoundaryCallData.getUncached(), context.getThreadState(PythonLanguage.get(inliningTarget)), callable,
+                                    clsPointer, real, imaginary);
+                    return checkFunctionResultNode.execute(context, symbol.getTsName(), toPythonNode.execute(nativeResult));
+                } finally {
+                    Reference.reachabilityFence(cls);
+                }
             }
         }
 
@@ -617,7 +634,11 @@ public final class ComplexBuiltins extends PythonBuiltins {
                 CompilerDirectives.transferToInterpreterAndInvalidate();
                 callComplexNode = insert(LookupAndCallUnaryNode.create(T___COMPLEX__));
             }
-            return callComplexNode.executeObject(frame, object);
+            try {
+                return callComplexNode.executeObject(frame, object);
+            } catch (SpecialMethodNotFound e) {
+                return null;
+            }
         }
 
         private WarningsModuleBuiltins.WarnNode getWarnNode() {
@@ -649,7 +670,7 @@ public final class ComplexBuiltins extends PythonBuiltins {
                                         object, "__complex__", "complex", result, "complex");
                     }
                     return (PComplex) result;
-                } else if (result != PNone.NO_VALUE) {
+                } else if (result != null) {
                     throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.COMPLEX_RETURNED_NON_COMPLEX, result);
                 }
                 if (object instanceof PComplex) {
@@ -961,13 +982,25 @@ public final class ComplexBuiltins extends PythonBuiltins {
         @Specialization
         static PComplex doInt(PComplex left, int right,
                         @Bind PythonLanguage language) {
-            return PFactory.createComplex(language, left.getReal() + right, left.getImag());
+            return PFactory.createComplex(language, left.getReal() + right, left.getImag() + 0.0);
         }
 
         @Specialization
         static PComplex doDouble(PComplex left, double right,
                         @Bind PythonLanguage language) {
-            return PFactory.createComplex(language, left.getReal() + right, left.getImag());
+            return PFactory.createComplex(language, left.getReal() + right, left.getImag() + 0.0);
+        }
+
+        @Specialization
+        static PComplex doInt(int left, PComplex right,
+                        @Bind PythonLanguage language) {
+            return PFactory.createComplex(language, left + right.getReal(), 0.0 + right.getImag());
+        }
+
+        @Specialization
+        static PComplex doDouble(double left, PComplex right,
+                        @Bind PythonLanguage language) {
+            return PFactory.createComplex(language, left + right.getReal(), 0.0 + right.getImag());
         }
 
         @Specialization
@@ -1077,13 +1110,25 @@ public final class ComplexBuiltins extends PythonBuiltins {
     abstract static class SubNode extends BinaryOpBuiltinNode {
         static PComplex doComplex(PComplex left, double right,
                         @Bind PythonLanguage language) {
-            return PFactory.createComplex(language, left.getReal() - right, left.getImag());
+            return PFactory.createComplex(language, left.getReal() - right, left.getImag() - 0.0);
         }
 
         @Specialization
         static PComplex doComplex(PComplex left, int right,
                         @Bind PythonLanguage language) {
-            return PFactory.createComplex(language, left.getReal() - right, left.getImag());
+            return PFactory.createComplex(language, left.getReal() - right, left.getImag() - 0.0);
+        }
+
+        @Specialization
+        static PComplex doComplex(int left, PComplex right,
+                        @Bind PythonLanguage language) {
+            return PFactory.createComplex(language, left - right.getReal(), 0.0 - right.getImag());
+        }
+
+        @Specialization
+        static PComplex doComplex(double left, PComplex right,
+                        @Bind PythonLanguage language) {
+            return PFactory.createComplex(language, left - right.getReal(), 0.0 - right.getImag());
         }
 
         @Specialization
@@ -1383,9 +1428,8 @@ public final class ComplexBuiltins extends PythonBuiltins {
 
         @Specialization
         @InliningCutoff
-        static double getNative(PythonAbstractNativeObject self,
-                        @Cached CStructAccess.ReadDoubleNode read) {
-            return read.readFromObj(self, PyComplexObject__cval__real);
+        static double getNative(PythonAbstractNativeObject self) {
+            return readDoubleField(self.getPtr(), PyComplexObject__cval__real);
         }
     }
 
@@ -1399,9 +1443,8 @@ public final class ComplexBuiltins extends PythonBuiltins {
 
         @Specialization
         @InliningCutoff
-        static double getNative(PythonAbstractNativeObject self,
-                        @Cached CStructAccess.ReadDoubleNode read) {
-            return read.readFromObj(self, PyComplexObject__cval__imag);
+        static double getNative(PythonAbstractNativeObject self) {
+            return readDoubleField(self.getPtr(), PyComplexObject__cval__imag);
         }
     }
 

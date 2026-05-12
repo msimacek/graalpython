@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -43,6 +43,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import org.graalvm.nativeimage.ImageInfo;
 import org.graalvm.options.OptionCategory;
 import org.graalvm.options.OptionDescriptor;
 import org.graalvm.options.OptionDescriptors;
@@ -61,6 +62,7 @@ import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.Option;
 import com.oracle.truffle.api.TruffleLanguage.Env;
+import com.oracle.truffle.api.bytecode.BytecodeNode;
 import com.oracle.truffle.api.dsl.Idempotent;
 import com.oracle.truffle.api.exception.AbstractTruffleException;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
@@ -86,16 +88,34 @@ public final class PythonOptions {
      * Whether to use the experimental Bytecode DSL interpreter instead of the manually-written
      * bytecode interpreter.
      */
-    public static final boolean ENABLE_BYTECODE_DSL_INTERPRETER = Boolean.getBoolean("python.EnableBytecodeDSLInterpreter");
+    public static final boolean ENABLE_BYTECODE_DSL_INTERPRETER;
     private static final OptionType<TruffleString> TS_OPTION_TYPE = new OptionType<>("graal.python.TruffleString", PythonUtils::toTruffleStringUncached);
+
+    static {
+        String prop = System.getProperty("python.EnableBytecodeDSLInterpreter");
+        if (prop != null) {
+            ENABLE_BYTECODE_DSL_INTERPRETER = prop.equalsIgnoreCase("true");
+        } else if (!ImageInfo.inImageCode()) {
+            // In JVM mode we also honor the env variable so that subprocesses spawned from tests in
+            // JVM mode run the same type of interpreter
+            String env = System.getenv("BYTECODE_DSL_INTERPRETER");
+            if (env != null) {
+                ENABLE_BYTECODE_DSL_INTERPRETER = env.equalsIgnoreCase("true");
+            } else {
+                ENABLE_BYTECODE_DSL_INTERPRETER = true;
+            }
+        } else {
+            ENABLE_BYTECODE_DSL_INTERPRETER = true;
+        }
+    }
 
     private PythonOptions() {
         // no instances
     }
 
     public static void checkBytecodeDSLEnv() {
-        if (!ENABLE_BYTECODE_DSL_INTERPRETER && "true".equalsIgnoreCase(System.getenv("BYTECODE_DSL_INTERPRETER"))) {
-            System.err.println("WARNING: found environment variable BYTECODE_DSL_INTERPRETER=true, but the python.EnableBytecodeDSLInterpreter Java property was not set.");
+        if (ENABLE_BYTECODE_DSL_INTERPRETER && "false".equalsIgnoreCase(System.getenv("BYTECODE_DSL_INTERPRETER"))) {
+            System.err.println("WARNING: found environment variable BYTECODE_DSL_INTERPRETER=false, but the python.EnableBytecodeDSLInterpreter Java property was not set and defaults to true.");
         }
     }
 
@@ -201,6 +221,11 @@ public final class PythonOptions {
                         }
                     }));
 
+    @Option(category = OptionCategory.EXPERT, help = "Entropy source used for reviewed initialization-time randomness. " +
+                    "Use 'default' to reuse the default Java source, 'device:<path>' to read bytes from a device or file, " +
+                    "or 'fixed:<seed>' for deterministic testing.", usageSyntax = "default|device:<path>|fixed:<seed>", stability = OptionStability.EXPERIMENTAL) //
+    public static final OptionKey<String> InitializationEntropySource = new OptionKey<>("default");
+
     @EngineOption @Option(category = OptionCategory.USER, help = "Choose the backend for the POSIX module.", usageSyntax = "java|native", stability = OptionStability.STABLE) //
     public static final OptionKey<TruffleString> PosixModuleBackend = new OptionKey<>(T_JAVA, TS_OPTION_TYPE);
 
@@ -210,8 +235,17 @@ public final class PythonOptions {
     @EngineOption @Option(category = OptionCategory.USER, help = "Choose the backend for the Zlib, Bz2, and LZMA modules.", usageSyntax = "java|native", stability = OptionStability.STABLE) //
     public static final OptionKey<TruffleString> CompressionModulesBackend = new OptionKey<>(T_JAVA, TS_OPTION_TYPE);
 
+    @EngineOption @Option(category = OptionCategory.USER, help = "Choose the backend for the pyexpat module.", usageSyntax = "java|native", stability = OptionStability.STABLE) //
+    public static final OptionKey<TruffleString> PyExpatModuleBackend = new OptionKey<>(T_JAVA, TS_OPTION_TYPE);
+
+    @EngineOption @Option(category = OptionCategory.USER, help = "Allow the unicodedata module to fall back from the ICU database to CPython's native UCD for unsupported features.", usageSyntax = "true|false", stability = OptionStability.STABLE) //
+    public static final OptionKey<Boolean> UnicodeCharacterDatabaseNativeFallback = new OptionKey<>(false);
+
     @Option(category = OptionCategory.USER, help = "Install default signal handlers on startup", usageSyntax = "true|false", stability = OptionStability.STABLE) //
     public static final OptionKey<Boolean> InstallSignalHandlers = new OptionKey<>(false);
+
+    @Option(category = OptionCategory.USER, help = "Allow installing signal handlers", usageSyntax = "true|false", stability = OptionStability.STABLE) //
+    public static final OptionKey<Boolean> AllowSignalHandlers = new OptionKey<>(false);
 
     @Option(category = OptionCategory.EXPERT, help = "Sets the language and territory, which will be used for initial locale. Format: 'language[_territory]', e.g., 'en_GB'. Leave empty to use the JVM default locale.", stability = OptionStability.STABLE) //
     public static final OptionKey<String> InitialLocale = new OptionKey<>("");
@@ -347,8 +381,19 @@ public final class PythonOptions {
     @Option(category = OptionCategory.INTERNAL, usageSyntax = "<time>", help = "Specifies the interval (ms) for the background GC task to monitor the resident set size (RSS)") //
     public static final OptionKey<Integer> BackgroundGCTaskInterval = new OptionKey<>(1000);
 
-    @Option(category = OptionCategory.INTERNAL, usageSyntax = "<limit>", help = "The percentage increase in RSS memory between System.gc() calls. Low percentage will trigger System.gc() more often. (default: 30).") //
-    public static final OptionKey<Integer> BackgroundGCTaskThreshold = new OptionKey<>(30);
+    @Option(category = OptionCategory.INTERNAL, usageSyntax = "[1,100]", help = "The percentage increase in RSS memory between System.gc() calls. Low percentage will trigger System.gc() more often. (default: 30).") //
+    public static final OptionKey<Integer> BackgroundGCTaskThreshold = new OptionKey<>(30,
+                    new OptionType<>("BackgroundGCTaskThreshold", input -> {
+                        try {
+                            int value = Integer.parseInt(input);
+                            if (value >= 1 && value <= 100) {
+                                return value;
+                            }
+                        } catch (NumberFormatException e) {
+                            // fallthrough
+                        }
+                        throw new IllegalArgumentException("BackgroundGCTaskThreshold must be an integer in range [1, 100]");
+                    }));
 
     @Option(category = OptionCategory.INTERNAL, usageSyntax = "<megabytes>", help = "The minimum RSS memory (in megabytes) to start calling System.gc(). (default: 4 GB).") //
     public static final OptionKey<Integer> BackgroundGCTaskMinimum = new OptionKey<>(4096);
@@ -368,8 +413,11 @@ public final class PythonOptions {
     @Option(category = OptionCategory.EXPERT, usageSyntax = "<bytes>", help = "Initial native memory heap size that triggers a GC (default: 256 MB).") //
     public static final OptionKey<Long> InitialNativeMemory = new OptionKey<>(1L << 28);
 
-    @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "Use the panama backend for NFI.", stability = OptionStability.EXPERIMENTAL) //
-    public static final OptionKey<Boolean> UsePanama = new OptionKey<>(false); // see [GR-67358]
+    @EngineOption @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "Poison GraalPy raw allocator headers and payloads before freeing native memory blocks.", stability = OptionStability.EXPERIMENTAL) //
+    public static final OptionKey<Boolean> PoisonNativeMemoryOnFree = new OptionKey<>(false);
+
+    @EngineOption @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "Record a lightweight rolling history of GraalPy raw native memory allocation sites for allocator debugging.", stability = OptionStability.EXPERIMENTAL) //
+    public static final OptionKey<Boolean> SampleNativeMemoryAllocSites = new OptionKey<>(false);
 
     @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "Set by the launcher to true (false means that GraalPy is being embedded in an application).") //
     public static final OptionKey<Boolean> RunViaLauncher = new OptionKey<>(false);
@@ -391,6 +439,17 @@ public final class PythonOptions {
 
     @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = "Print warnings when using experimental features at runtime.", stability = OptionStability.STABLE) //
     public static final OptionKey<Boolean> WarnExperimentalFeatures = new OptionKey<>(true);
+
+    @EngineOption @Option(category = OptionCategory.EXPERT, usageSyntax = "true|false", help = """
+                    By default GraalPy only keeps a transformed form of bytecode in memory and may need to reread bytecode files when a different form of bytecode is requested, \
+                    such as when settrace instrumentation is enabled. This option avoids rereading bytecode files by keeping the original bytecode form in memory""") //
+    public static final OptionKey<Boolean> KeepBytecodeInMemory = new OptionKey<>(false);
+
+    @EngineOption @Option(category = OptionCategory.INTERNAL, help = "", stability = OptionStability.EXPERIMENTAL) //
+    public static final OptionKey<Boolean> ForceUncachedInterpreter = new OptionKey<>(false);
+
+    @EngineOption @Option(category = OptionCategory.INTERNAL, help = "", stability = OptionStability.EXPERIMENTAL) //
+    public static final OptionKey<Integer> UncachedInterpreterThreshold = new OptionKey<>(-1);
 
     public static final OptionDescriptors DESCRIPTORS = new PythonOptionsOptionDescriptors();
 
@@ -491,6 +550,16 @@ public final class PythonOptions {
             }
         }
         return true;
+    }
+
+    public static void setUncachedInterpreterThreshold(PythonLanguage language, BytecodeNode bytecodeNode) {
+        if (language.getEngineOption(ForceUncachedInterpreter)) {
+            bytecodeNode.setUncachedThreshold(Integer.MIN_VALUE);
+        }
+        int threshold = language.getEngineOption(UncachedInterpreterThreshold);
+        if (threshold >= 0) {
+            bytecodeNode.setUncachedThreshold(threshold);
+        }
     }
 
     @Idempotent

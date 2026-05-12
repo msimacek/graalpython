@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,6 +41,8 @@
 package com.oracle.graal.python.compiler.bytecode_dsl;
 
 import java.util.EnumSet;
+import java.util.HashMap;
+import java.util.Map;
 
 import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.compiler.Compiler;
@@ -52,7 +54,6 @@ import com.oracle.graal.python.pegparser.scope.Scope;
 import com.oracle.graal.python.pegparser.scope.ScopeEnvironment;
 import com.oracle.graal.python.pegparser.sst.ModTy;
 import com.oracle.graal.python.pegparser.sst.StmtTy;
-import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.truffle.api.source.Source;
 
 public class BytecodeDSLCompiler {
@@ -60,7 +61,7 @@ public class BytecodeDSLCompiler {
     public static final record BytecodeDSLCompilerResult(PBytecodeDSLRootNode rootNode, BytecodeDSLCodeUnit codeUnit) {
     }
 
-    public static BytecodeDSLCompilerResult compile(PythonLanguage language, PythonContext context, ModTy mod, Source source, int optimize, ParserCallbacksImpl parserCallbacks,
+    public static BytecodeDSLCompilerResult compile(PythonLanguage language, ModTy mod, Source source, int optimize, ParserCallbacksImpl parserCallbacks,
                     EnumSet<FutureFeature> futureFeatures) {
         /**
          * Parse __future__ annotations before the analysis step. The analysis does extra validation
@@ -68,7 +69,7 @@ public class BytecodeDSLCompiler {
          */
         int futureLineNumber = parseFuture(mod, futureFeatures, parserCallbacks);
         ScopeEnvironment scopeEnvironment = ScopeEnvironment.analyze(mod, parserCallbacks, futureFeatures);
-        BytecodeDSLCompilerContext ctx = new BytecodeDSLCompilerContext(language, context, mod, source, optimize, futureFeatures, futureLineNumber, parserCallbacks, scopeEnvironment);
+        BytecodeDSLCompilerContext ctx = new BytecodeDSLCompilerContext(language, mod, source, optimize, futureFeatures, futureLineNumber, parserCallbacks, scopeEnvironment);
         RootNodeCompiler compiler = new RootNodeCompiler(ctx, null, mod, futureFeatures);
         return compiler.compile();
     }
@@ -88,7 +89,6 @@ public class BytecodeDSLCompiler {
     public static class BytecodeDSLCompilerContext {
 
         public final PythonLanguage language;
-        public final PythonContext pythonContext;
         public final ModTy mod;
         public final Source source;
         public final int optimizationLevel;
@@ -96,11 +96,12 @@ public class BytecodeDSLCompiler {
         public final int futureLineNumber;
         public final ParserCallbacksImpl errorCallback;
         public final ScopeEnvironment scopeEnvironment;
+        // Store code units for possible reparses
+        public final Map<Object, BytecodeDSLCodeUnit> codeUnits = new HashMap<>();
 
-        public BytecodeDSLCompilerContext(PythonLanguage language, PythonContext context, ModTy mod, Source source, int optimizationLevel,
+        public BytecodeDSLCompilerContext(PythonLanguage language, ModTy mod, Source source, int optimizationLevel,
                         EnumSet<FutureFeature> futureFeatures, int futureLineNumber, ParserCallbacksImpl errorCallback, ScopeEnvironment scopeEnvironment) {
             this.language = language;
-            this.pythonContext = context;
             this.mod = mod;
             this.source = source;
             this.optimizationLevel = optimizationLevel;

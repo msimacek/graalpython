@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -72,6 +72,7 @@ import com.oracle.graal.python.nodes.PRootNode;
 import com.oracle.graal.python.nodes.bytecode.FrameInfo;
 import com.oracle.graal.python.nodes.bytecode.GeneratorReturnException;
 import com.oracle.graal.python.nodes.bytecode.GeneratorYieldResult;
+import com.oracle.graal.python.nodes.bytecode_dsl.PBytecodeDSLRootNode;
 import com.oracle.graal.python.nodes.call.CallDispatchers;
 import com.oracle.graal.python.nodes.frame.MaterializeFrameNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
@@ -160,8 +161,9 @@ public final class CommonGeneratorBuiltins extends PythonBuiltins {
             return handleResult(inliningTarget, self, result);
         }
 
-        @Specialization(guards = {"isBytecodeDSLInterpreter()", "sameCallTarget(self.getCurrentCallTarget(), callNode)"}, limit = "getCallSiteInlineCacheMaxDepth()")
+        @Specialization(guards = {"isBytecodeDSLInterpreter()", "self.getBytecodeDSLContinuationRootNode() == continuationRootNode"}, limit = "getCallSiteInlineCacheMaxDepth()")
         static Object cachedBytecodeDSL(VirtualFrame frame, Node inliningTarget, PGenerator self, Object sendValue,
+                        @Cached("self.getBytecodeDSLContinuationRootNode()") ContinuationRootNode continuationRootNode,
                         @Cached(parameters = "self.getCurrentCallTarget()") DirectCallNode callNode,
                         @Exclusive @Cached ExecutionContext.CallContext callContext,
                         @Exclusive @Cached InlinedBranchProfile returnProfile,
@@ -170,9 +172,8 @@ public final class CommonGeneratorBuiltins extends PythonBuiltins {
             self.setRunning(true);
             Object generatorResult;
             try {
-                self.prepareResume();
-                RootCallTarget callTarget = (RootCallTarget) callNode.getCurrentCallTarget();
-                PRootNode rootNode = PGenerator.unwrapContinuationRoot((ContinuationRootNode) callTarget.getRootNode());
+                Object[] generatorArguments = self.prepareResume();
+                PRootNode rootNode = PGenerator.unwrapContinuationRoot(continuationRootNode);
                 /*
                  * When resuming a generator/coroutine, the call target is a ContinuationRoot with a
                  * different calling convention from regular PRootNodes. The first argument is a
@@ -186,7 +187,6 @@ public final class CommonGeneratorBuiltins extends PythonBuiltins {
                  */
                 MaterializedFrame generatorFrame = self.getGeneratorFrame();
                 Object[] callArguments = new Object[]{generatorFrame, sendValue};
-                Object[] generatorArguments = generatorFrame.getArguments();
                 if (frame == null) {
                     PythonContext context = PythonContext.get(inliningTarget);
                     PythonThreadState threadState = context.getThreadState(context.getLanguage(inliningTarget));
@@ -252,13 +252,12 @@ public final class CommonGeneratorBuiltins extends PythonBuiltins {
             self.setRunning(true);
             Object generatorResult;
             try {
-                self.prepareResume();
+                Object[] generatorArguments = self.prepareResume();
                 RootCallTarget callTarget = self.getCurrentCallTarget();
                 // See the cached specialization for notes about the arguments handling
                 PRootNode rootNode = PGenerator.unwrapContinuationRoot((ContinuationRootNode) callTarget.getRootNode());
                 MaterializedFrame generatorFrame = self.getGeneratorFrame();
                 Object[] callArguments = new Object[]{generatorFrame, sendValue};
-                Object[] generatorArguments = generatorFrame.getArguments();
                 if (frame == null) {
                     PythonContext context = PythonContext.get(inliningTarget);
                     PythonThreadState threadState = context.getThreadState(context.getLanguage(inliningTarget));
@@ -360,7 +359,6 @@ public final class CommonGeneratorBuiltins extends PythonBuiltins {
                         @Cached ResumeGeneratorNode resumeGeneratorNode,
                         @Cached ExceptionNodes.GetTracebackNode getTracebackNode,
                         @Cached ExceptionNodes.SetTracebackNode setTracebackNode,
-                        @Cached ExceptionNodes.SetContextNode setContextNode,
                         @Cached WarningsModuleBuiltins.WarnNode warnNode,
                         @Cached PRaiseNode raiseNode) {
             boolean hasTb = hasTbProfile.profile(inliningTarget, !(tb instanceof PNone));
@@ -381,8 +379,6 @@ public final class CommonGeneratorBuiltins extends PythonBuiltins {
                 setTracebackNode.execute(inliningTarget, instance, tb);
             }
             PythonLanguage language = PythonLanguage.get(inliningTarget);
-            setContextNode.execute(inliningTarget, instance, PNone.NONE); // Will be filled when
-                                                                          // caught
             if (self.isCoroutine() && self.isFinished()) {
                 throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.RuntimeError, ErrorMessages.CANNOT_REUSE_CORO);
             }
@@ -403,13 +399,13 @@ public final class CommonGeneratorBuiltins extends PythonBuiltins {
                 Node location;
                 RootNode rootNode = self.getCurrentCallTarget().getRootNode();
                 if (PythonOptions.ENABLE_BYTECODE_DSL_INTERPRETER) {
-                    location = self.getBytecodeNode();
+                    location = ((PBytecodeDSLRootNode) self.getRootNode()).getBytecodeNode();
                 } else {
                     location = rootNode;
                 }
                 MaterializedFrame generatorFrame = self.getGeneratorFrame();
                 PFrame.Reference ref = new PFrame.Reference(rootNode, PFrame.Reference.EMPTY);
-                PFrame pFrame = MaterializeFrameNode.materializeGeneratorFrame(location, generatorFrame, self.getGlobals(), ref);
+                PFrame pFrame = MaterializeFrameNode.materializeGeneratorFrame(PythonLanguage.get(inliningTarget), location, generatorFrame, self.getGeneratorFunction(), self.getGlobals(), ref);
                 FrameInfo info = (FrameInfo) generatorFrame.getFrameDescriptor().getInfo();
                 pFrame.setLine(info.getFirstLineNumber());
                 Object existingTracebackObj = getTracebackNode.execute(inliningTarget, instance);

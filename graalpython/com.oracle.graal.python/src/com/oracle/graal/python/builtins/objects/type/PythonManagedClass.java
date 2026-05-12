@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -31,10 +31,11 @@ import static com.oracle.graal.python.nodes.SpecialAttributeNames.T___DOC__;
 import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
-import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes.PCallCapiFunction;
+import com.oracle.graal.python.builtins.objects.cext.capi.CApiContext;
+import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes.EnsurePythonObjectNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionInvoker;
 import com.oracle.graal.python.builtins.objects.cext.capi.NativeCAPISymbol;
-import com.oracle.graal.python.builtins.objects.cext.capi.PythonClassNativeWrapper;
-import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitionsFactory.PythonToNativeNodeGen;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.PythonToNativeNode;
 import com.oracle.graal.python.builtins.objects.common.HashingStorage;
 import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
@@ -57,7 +58,7 @@ import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.object.Shape;
 import com.oracle.truffle.api.strings.TruffleString;
-import com.oracle.truffle.api.strings.TruffleString.CodePointAtIndexNode;
+import com.oracle.truffle.api.strings.TruffleString.CodePointAtIndexUTF32Node;
 import com.oracle.truffle.api.strings.TruffleString.CodePointLengthNode;
 
 public abstract class PythonManagedClass extends PythonObject implements PythonAbstractClass {
@@ -69,12 +70,17 @@ public abstract class PythonManagedClass extends PythonObject implements PythonA
     private boolean abstractClass;
 
     private final PDict subClasses;
+    /**
+     * This field is positioned to be at the same offset as the one in
+     * {@link com.oracle.graal.python.builtins.PythonBuiltinClassType#slots}. I found that the
+     * compiler in the lower tier will then unify the diamond because it's actually reading at the
+     * same offset from the object pointer, and that gave a small but measurable speedup.
+     */
+    protected TpSlots tpSlots;
     @CompilationFinal private Shape instanceShape;
     private TruffleString name;
     private TruffleString qualName;
     private int indexedSlotCount;
-
-    protected TpSlots tpSlots;
 
     /** {@code true} if the MRO contains a native class. */
     private final boolean needsNativeAllocation;
@@ -219,7 +225,7 @@ public abstract class PythonManagedClass extends PythonObject implements PythonA
     public void onAttributeUpdate(TruffleString key, Object value) {
         callOnAttributeUpdateOnSubclasses(subClasses, key, value);
         methodResolutionOrder.invalidateFinalAttributeAssumption(key);
-        if (TpSlots.canBeSpecialMethod(key, CodePointLengthNode.getUncached(), CodePointAtIndexNode.getUncached())) {
+        if (TpSlots.canBeSpecialMethod(key, CodePointLengthNode.getUncached(), CodePointAtIndexUTF32Node.getUncached())) {
             if (this.tpSlots != null) {
                 // This is called during type instantiation from copyDictSlots when the tp slots are
                 // not initialized yet
@@ -233,7 +239,7 @@ public abstract class PythonManagedClass extends PythonObject implements PythonA
         assert TypeNodes.IsTypeNode.executeUncached(nativeClass);
         callOnAttributeUpdateOnSubclasses(GetSubclassesNode.executeUncached(nativeClass), key, value);
         TypeNodes.GetMroStorageNode.executeUncached(nativeClass).invalidateFinalAttributeAssumption(key);
-        if (TpSlots.canBeSpecialMethod(key, CodePointLengthNode.getUncached(), CodePointAtIndexNode.getUncached())) {
+        if (TpSlots.canBeSpecialMethod(key, CodePointLengthNode.getUncached(), CodePointAtIndexUTF32Node.getUncached())) {
             TpSlots.updateSlot(nativeClass, key);
         }
     }
@@ -279,8 +285,14 @@ public abstract class PythonManagedClass extends PythonObject implements PythonA
         for (PythonAbstractClass base : getBaseClasses()) {
             if (base != null) {
                 if (PGuards.isNativeClass(base)) {
-                    Object nativeBase = PythonToNativeNodeGen.getUncached().execute(base);
-                    PCallCapiFunction.callUncached(NativeCAPISymbol.FUN_TRUFFLE_CHECK_TYPE_READY, nativeBase);
+                    assert EnsurePythonObjectNode.doesNotNeedPromotion(base);
+                    try {
+                        ExternalFunctionInvoker.invokeTRUFFLE_CHECK_TYPE_READY(
+                                        CApiContext.getNativeSymbol(null, NativeCAPISymbol.FUN_TRUFFLE_CHECK_TYPE_READY).getAddress(),
+                                        PythonToNativeNode.executeLongUncached(base));
+                    } catch (Throwable t) {
+                        throw CompilerDirectives.shouldNotReachHere(t);
+                    }
                 }
                 GetSubclassesNode.addSubclass(base, this);
             }
@@ -361,10 +373,6 @@ public abstract class PythonManagedClass extends PythonObject implements PythonA
 
     public final PythonAbstractClass[] getBaseClasses() {
         return baseClasses;
-    }
-
-    public PythonClassNativeWrapper getClassNativeWrapper() {
-        return (PythonClassNativeWrapper) super.getNativeWrapper();
     }
 
     public boolean needsNativeAllocation() {

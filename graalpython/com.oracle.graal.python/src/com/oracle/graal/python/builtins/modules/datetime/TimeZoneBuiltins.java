@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,9 +40,25 @@
  */
 package com.oracle.graal.python.builtins.modules.datetime;
 
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ValueError;
+import static com.oracle.graal.python.nodes.BuiltinNames.T_MAX;
+import static com.oracle.graal.python.nodes.BuiltinNames.T_MIN;
+import static com.oracle.graal.python.nodes.BuiltinNames.T_TIMEZONE;
+import static com.oracle.graal.python.nodes.BuiltinNames.T_UTC;
+import static com.oracle.graal.python.nodes.BuiltinNames.T__DATETIME;
+import static com.oracle.graal.python.nodes.SpecialMethodNames.J___GETINITARGS__;
+import static com.oracle.graal.python.nodes.SpecialMethodNames.T___REPR__;
+import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
+import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
+
+import java.util.List;
+
 import com.oracle.graal.python.PythonLanguage;
-import com.oracle.graal.python.annotations.Slot;
 import com.oracle.graal.python.annotations.Builtin;
+import com.oracle.graal.python.annotations.Slot;
+import com.oracle.graal.python.annotations.Slot.SlotKind;
+import com.oracle.graal.python.annotations.Slot.SlotSignature;
 import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.Python3Core;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
@@ -55,6 +71,7 @@ import com.oracle.graal.python.builtins.objects.type.PythonBuiltinClass;
 import com.oracle.graal.python.builtins.objects.type.TpSlots;
 import com.oracle.graal.python.builtins.objects.type.slots.TpSlotHashFun;
 import com.oracle.graal.python.builtins.objects.type.slots.TpSlotRichCompare.RichCmpBuiltinNode;
+import com.oracle.graal.python.lib.PyDateTimeCheckNode;
 import com.oracle.graal.python.lib.PyObjectCallMethodObjArgs;
 import com.oracle.graal.python.lib.PyObjectHashNode;
 import com.oracle.graal.python.lib.PyObjectReprAsObjectNode;
@@ -72,7 +89,6 @@ import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
@@ -81,20 +97,6 @@ import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.AbstractTruffleString;
 import com.oracle.truffle.api.strings.TruffleString;
-
-import java.util.List;
-
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ValueError;
-import static com.oracle.graal.python.nodes.BuiltinNames.T_MIN;
-import static com.oracle.graal.python.nodes.BuiltinNames.T_TIMEZONE;
-import static com.oracle.graal.python.nodes.BuiltinNames.T_UTC;
-import static com.oracle.graal.python.nodes.BuiltinNames.T__DATETIME;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.J___GETINITARGS__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.T___REPR__;
-import static com.oracle.graal.python.nodes.BuiltinNames.T_MAX;
-import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
-import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PTimezone)
 public final class TimeZoneBuiltins extends PythonBuiltins {
@@ -135,8 +137,8 @@ public final class TimeZoneBuiltins extends PythonBuiltins {
         self.setAttribute(T_UTC_ATTRIBUTE, utc);
     }
 
-    @Slot(value = Slot.SlotKind.tp_new, isComplex = true)
-    @Slot.SlotSignature(name = "datetime.timezone", minNumOfPositionalArgs = 2, parameterNames = {"$cls", "offset", "name"})
+    @Slot(value = SlotKind.tp_new, isComplex = true)
+    @SlotSignature(name = "datetime.timezone", minNumOfPositionalArgs = 2, parameterNames = {"$cls", "offset", "name"})
     @GenerateNodeFactory
     public abstract static class NewNode extends PythonBuiltinNode {
 
@@ -148,7 +150,7 @@ public final class TimeZoneBuiltins extends PythonBuiltins {
         }
     }
 
-    @Slot(value = Slot.SlotKind.tp_str, isComplex = true)
+    @Slot(value = SlotKind.tp_str, isComplex = true)
     @GenerateNodeFactory
     public abstract static class StrNode extends PythonUnaryBuiltinNode {
 
@@ -159,7 +161,7 @@ public final class TimeZoneBuiltins extends PythonBuiltins {
         }
     }
 
-    @Slot(value = Slot.SlotKind.tp_repr, isComplex = true)
+    @Slot(value = SlotKind.tp_repr, isComplex = true)
     @GenerateNodeFactory
     public abstract static class ReprNode extends PythonUnaryBuiltinNode {
 
@@ -208,7 +210,7 @@ public final class TimeZoneBuiltins extends PythonBuiltins {
         }
     }
 
-    @Slot(value = Slot.SlotKind.tp_richcompare, isComplex = true)
+    @Slot(value = SlotKind.tp_richcompare, isComplex = true)
     @GenerateNodeFactory
     abstract static class RichCmpNode extends RichCmpBuiltinNode {
 
@@ -228,7 +230,7 @@ public final class TimeZoneBuiltins extends PythonBuiltins {
         }
     }
 
-    @Slot(value = Slot.SlotKind.tp_hash, isComplex = true)
+    @Slot(value = SlotKind.tp_hash, isComplex = true)
     @GenerateNodeFactory
     abstract static class HashNode extends TpSlotHashFun.HashBuiltinNode {
 
@@ -246,25 +248,18 @@ public final class TimeZoneBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     public abstract static class UtcOffsetNode extends PythonBinaryBuiltinNode {
 
-        @Specialization
-        static PTimeDelta utcOffset(PTimeZone self, PDateTime dt) {
-            return self.offset;
-        }
-
         @Specialization(guards = {"isNone(dt)"})
         static PTimeDelta utcOffsetForNone(PTimeZone self, PNone dt) {
             return self.offset;
         }
 
-        @Fallback
-        static void doGeneric(Object self, Object dt,
+        @Specialization(guards = {"!isNone(dt)"})
+        static PTimeDelta utcOffset(PTimeZone self, Object dt,
                         @Bind Node inliningTarget,
+                        @Cached PyDateTimeCheckNode dateTimeCheckNode,
                         @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(inliningTarget, TypeError,
-                            ErrorMessages.S_ARGUMENT_MUST_BE_A_S_INSTANCE_OR_NONE_NOT_P,
-                            "utcoffset(dt)",
-                            "datetime",
-                            dt);
+            validateDateTimeOrNone(dt, "utcoffset(dt)", inliningTarget, dateTimeCheckNode, raiseNode);
+            return self.offset;
         }
     }
 
@@ -272,26 +267,18 @@ public final class TimeZoneBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     public abstract static class DstNode extends PythonBinaryBuiltinNode {
 
-        @Specialization
-        static Object dst(PTimeZone self, PDateTime dt) {
-            return PNone.NONE;
-        }
-
         @Specialization(guards = {"isNone(dt)"})
         static Object dst(PTimeZone self, PNone dt) {
             return PNone.NONE;
         }
 
-        @Fallback
-        static void doGeneric(Object self, Object dt,
+        @Specialization(guards = {"!isNone(dt)"})
+        static Object dst(PTimeZone self, Object dt,
                         @Bind Node inliningTarget,
+                        @Cached PyDateTimeCheckNode dateTimeCheckNode,
                         @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(inliningTarget,
-                            TypeError,
-                            ErrorMessages.S_ARGUMENT_MUST_BE_A_S_INSTANCE_OR_NONE_NOT_P,
-                            "dst(dt)",
-                            "datetime",
-                            dt);
+            validateDateTimeOrNone(dt, "dst(dt)", inliningTarget, dateTimeCheckNode, raiseNode);
+            return PNone.NONE;
         }
     }
 
@@ -299,26 +286,18 @@ public final class TimeZoneBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     public abstract static class TzNameNode extends PythonBinaryBuiltinNode {
 
-        @Specialization
-        static TruffleString tzName(PTimeZone self, PDateTime dt) {
-            return getTzName(self);
-        }
-
         @Specialization(guards = {"isNone(dt)"})
         static TruffleString tzName(PTimeZone self, PNone dt) {
             return getTzName(self);
         }
 
-        @Fallback
-        static void doGeneric(Object self, Object dt,
+        @Specialization(guards = {"!isNone(dt)"})
+        static TruffleString tzName(PTimeZone self, Object dt,
                         @Bind Node inliningTarget,
+                        @Cached PyDateTimeCheckNode dateTimeCheckNode,
                         @Cached PRaiseNode raiseNode) {
-            throw raiseNode.raise(inliningTarget,
-                            TypeError,
-                            ErrorMessages.S_ARGUMENT_MUST_BE_A_S_INSTANCE_OR_NONE_NOT_P,
-                            "tzname(dt)",
-                            "datetime",
-                            dt);
+            validateDateTimeOrNone(dt, "tzname(dt)", inliningTarget, dateTimeCheckNode, raiseNode);
+            return getTzName(self);
         }
     }
 
@@ -347,22 +326,21 @@ public final class TimeZoneBuiltins extends PythonBuiltins {
     public abstract static class FromUtcNode extends PythonBinaryBuiltinNode {
 
         @Specialization
-        static Object fromUtc(PTimeZone self, PDateTime dateTime,
+        static Object fromUtc(PTimeZone self, Object dateTime,
                         @Bind Node inliningTarget,
-                        @Cached @Shared PRaiseNode raiseNode,
+                        @Cached PyDateTimeCheckNode dateTimeCheckNode,
+                        @Cached DateTimeNodes.TzInfoNode tzInfoNode,
+                        @Cached PRaiseNode raiseNode,
                         @Cached DateTimeNodes.SubclassNewNode dateTimeSubclassNewNode) {
-            if (dateTime.tzInfo != self) {
+            if (!dateTimeCheckNode.execute(inliningTarget, dateTime)) {
+                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.FROMUTC_ARGUMENT_MUST_BE_A_DATETIME);
+            }
+            Object tzInfo = tzInfoNode.execute(inliningTarget, dateTime);
+            if (tzInfo != self) {
                 throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.FROMUTC_DT_TZINFO_IS_NOT_SELF);
             }
 
             return DatetimeModuleBuiltins.addOffsetToDateTime(dateTime, self.offset, dateTimeSubclassNewNode, inliningTarget);
-        }
-
-        @Fallback
-        static void doGeneric(Object self, Object dateTime,
-                        @Bind Node inliningTarget,
-                        @Cached @Shared PRaiseNode raiseNode) {
-            throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.FROMUTC_ARGUMENT_MUST_BE_A_DATETIME);
         }
     }
 
@@ -399,5 +377,16 @@ public final class TimeZoneBuiltins extends PythonBuiltins {
         }
 
         return TruffleString.FromJavaStringNode.getUncached().execute(builder.toString(), TS_ENCODING);
+    }
+
+    private static void validateDateTimeOrNone(Object dt, String methodName, Node inliningTarget, PyDateTimeCheckNode dateTimeCheckNode, PRaiseNode raiseNode) {
+        if (!dateTimeCheckNode.execute(inliningTarget, dt)) {
+            throw raiseNode.raise(inliningTarget,
+                            TypeError,
+                            ErrorMessages.S_ARGUMENT_MUST_BE_A_S_INSTANCE_OR_NONE_NOT_P,
+                            methodName,
+                            "datetime",
+                            dt);
+        }
     }
 }

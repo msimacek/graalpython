@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,15 +42,14 @@ package com.oracle.graal.python.nodes.attributes;
 
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
-import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageGetItem;
+import com.oracle.graal.python.builtins.objects.common.HashingStorageNodes.HashingStorageGetItemStringKey;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.object.PythonObject;
 import com.oracle.graal.python.nodes.PNodeWithContext;
 import com.oracle.graal.python.nodes.object.GetDictIfExistsNode;
-import com.oracle.truffle.api.HostCompilerDirectives.InliningCutoff;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.Cached.Exclusive;
+import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.NeverDefault;
@@ -65,7 +64,7 @@ import com.oracle.truffle.api.strings.TruffleString;
  */
 @ReportPolymorphism
 @GenerateUncached
-@GenerateInline(false) // footprint reduction 64 -> 47
+@GenerateInline(false)
 public abstract class ReadAttributeFromObjectNode extends PNodeWithContext {
 
     @NeverDefault
@@ -79,19 +78,22 @@ public abstract class ReadAttributeFromObjectNode extends PNodeWithContext {
 
     public abstract Object execute(Object object, TruffleString key);
 
+    public abstract Object execute(PythonObject object, TruffleString key);
+
     public abstract Object execute(PythonAbstractNativeObject object, TruffleString key);
 
     // any python object attribute read
     @Specialization
     static Object readObjectAttribute(PythonObject object, TruffleString key,
                     @Bind Node inliningTarget,
-                    @Cached InlinedConditionProfile profileHasDict,
-                    @Exclusive @Cached GetDictIfExistsNode getDict,
-                    @Cached ReadAttributeFromPythonObjectNode readAttributeFromPythonObjectNode,
-                    @Exclusive @Cached HashingStorageGetItem getItem) {
+                    @Shared @Cached InlinedConditionProfile profileHasDict,
+                    @Shared @Cached GetDictIfExistsNode getDict,
+                    @Shared @Cached(inline = true) ReadAttributeFromPythonObjectNode readAttributeFromPythonObjectNode,
+                    @Shared @Cached HashingStorageGetItemStringKey getItem) {
         var dict = getDict.execute(object);
+        assert object.checkDictFlags(dict);
         if (profileHasDict.profile(inliningTarget, dict == null)) {
-            return readAttributeFromPythonObjectNode.execute(object, key);
+            return readAttributeFromPythonObjectNode.execute(inliningTarget, object, key);
         } else {
             Object value = getItem.execute(inliningTarget, dict.getDictStorage(), key);
             if (value == null) {
@@ -105,11 +107,11 @@ public abstract class ReadAttributeFromObjectNode extends PNodeWithContext {
     @Specialization
     static Object readNativeObject(PythonAbstractNativeObject object, TruffleString key,
                     @Bind Node inliningTarget,
-                    @Exclusive @Cached GetDictIfExistsNode getDict,
-                    @Exclusive @Cached HashingStorageGetItem getItem) {
+                    @Shared @Cached GetDictIfExistsNode getDict,
+                    @Shared @Cached HashingStorageGetItemStringKey getItem) {
         PDict dict = getDict.execute(object);
         if (dict != null) {
-            Object result = getItem.execute(null, inliningTarget, dict.getDictStorage(), key);
+            Object result = getItem.execute(inliningTarget, dict.getDictStorage(), key);
             if (result != null) {
                 return result;
             }
@@ -118,7 +120,6 @@ public abstract class ReadAttributeFromObjectNode extends PNodeWithContext {
     }
 
     // foreign object or primitive
-    @InliningCutoff
     @Specialization(guards = {"!isPythonObject(object)", "!isNativeObject(object)"})
     static Object readForeignOrPrimitive(Object object, TruffleString key) {
         // Foreign members are tried after the regular attribute lookup, see

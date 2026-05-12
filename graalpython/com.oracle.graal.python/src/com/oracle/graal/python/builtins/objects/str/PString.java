@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -66,14 +66,6 @@ public final class PString extends PythonBuiltinObject {
         return isMaterialized() ? getMaterialized() : StringMaterializeNode.executeUncached(this);
     }
 
-    public NativeStringData getNativeStringData(Node inliningTarget, HiddenAttr.ReadNode readNode) {
-        return (NativeStringData) readNode.execute(inliningTarget, this, HiddenAttr.PSTRING_NATIVE_DATA, null);
-    }
-
-    public void setNativeStringData(Node inliningTarget, HiddenAttr.WriteNode writeNode, NativeStringData value) {
-        writeNode.execute(inliningTarget, this, HiddenAttr.PSTRING_NATIVE_DATA, value);
-    }
-
     public PBytes getUtf8Bytes(Node inliningTarget, HiddenAttr.ReadNode readNode) {
         return (PBytes) readNode.execute(inliningTarget, this, HiddenAttr.PSTRING_UTF8, null);
     }
@@ -107,9 +99,7 @@ public final class PString extends PythonBuiltinObject {
     @TruffleBoundary
     public void intern() {
         assert isBuiltinPString(this);
-        TruffleString ts = getValueUncached();
-        TruffleString interned = PythonUtils.internString(ts);
-        materializedValue = interned;
+        materializedValue = PythonUtils.internString(getValueUncached());
     }
 
     @Override
@@ -165,12 +155,12 @@ public final class PString extends PythonBuiltinObject {
     Object readArrayElement(long index,
                     @Bind Node inliningTarget,
                     @Cached CastToTruffleStringNode cast,
-                    @Cached TruffleString.CodePointAtIndexNode codePointAtIndexNode,
+                    @Cached TruffleString.CodePointAtIndexUTF32Node codePointAtIndexNode,
                     @Shared("gil") @Cached GilNode gil) {
         boolean mustRelease = gil.acquire();
         try {
             try {
-                return codePointAtIndexNode.execute(cast.execute(inliningTarget, this), (int) index, TS_ENCODING);
+                return codePointAtIndexNode.execute(cast.execute(inliningTarget, this), (int) index);
             } catch (CannotCastException e) {
                 throw CompilerDirectives.shouldNotReachHere("A PString should always have an underlying CharSequence");
             }

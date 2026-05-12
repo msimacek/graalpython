@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -51,6 +51,8 @@ import com.oracle.graal.python.builtins.objects.traceback.LazyTraceback;
 import com.oracle.graal.python.builtins.objects.traceback.MaterializeLazyTracebackNode;
 import com.oracle.graal.python.builtins.objects.traceback.PTraceback;
 import com.oracle.graal.python.lib.PyExceptionInstanceCheckNode;
+import com.oracle.graal.python.nodes.ErrorMessages;
+import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.PRootNode;
 import com.oracle.graal.python.nodes.bytecode.PBytecodeRootNode;
 import com.oracle.graal.python.nodes.bytecode_dsl.PBytecodeDSLRootNode;
@@ -58,8 +60,10 @@ import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinObject
 import com.oracle.graal.python.runtime.GilNode;
 import com.oracle.graal.python.runtime.PythonOptions;
 import com.oracle.truffle.api.CompilerAsserts;
+import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.bytecode.BytecodeNode;
+import com.oracle.truffle.api.bytecode.LocalVariable;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Exclusive;
@@ -72,9 +76,11 @@ import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
+import com.oracle.truffle.api.nodes.EncapsulatingNodeReference;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 import com.oracle.truffle.api.source.SourceSection;
+import com.oracle.truffle.api.strings.TruffleString;
 
 /**
  * Serves both as a throwable carrier of the python exception object ({@link PBaseException}) and as
@@ -110,6 +116,7 @@ public final class PException extends AbstractTruffleException {
     private int catchBci;
     private boolean reified = false;
     private boolean skipFirstTracebackFrame;
+    private boolean reraised;
 
     // See the docs of MaterializeLazyTracebackNode
     private int tracebackFrameCount;
@@ -130,6 +137,14 @@ public final class PException extends AbstractTruffleException {
         super(null, wrapped, UNLIMITED_STACK_TRACE, validateLocation(node));
         this.pythonException = pythonException;
         assert PyExceptionInstanceCheckNode.executeUncached(pythonException);
+    }
+
+    public static PException fromObjectFixUncachedLocation(Object pythonException, Node location, boolean withJavaStacktrace) {
+        Node n = location;
+        if (n == null || !n.isAdoptable()) {
+            n = EncapsulatingNodeReference.getCurrent().get();
+        }
+        return fromObject(pythonException, n, withJavaStacktrace);
     }
 
     public static PException fromObject(Object pythonException, Node node, boolean withJavaStacktrace) {
@@ -177,9 +192,14 @@ public final class PException extends AbstractTruffleException {
     @Override
     public String getMessage() {
         if (message == null) {
-            return pythonException.toString();
+            return getPythonExceptionString();
         }
         return message;
+    }
+
+    @TruffleBoundary
+    private String getPythonExceptionString() {
+        return pythonException.toString();
     }
 
     public void materializeMessage() {
@@ -417,6 +437,7 @@ public final class PException extends AbstractTruffleException {
     public PException getExceptionForReraise(boolean rootNodeVisible) {
         ensureReified();
         PException pe = PException.fromObject(pythonException, getLocation(), false);
+        pe.reraised = true;
         if (pe.getUnreifiedException() instanceof PBaseExceptionGroup grp) {
             grp.setContainsReraises(true);
         }
@@ -561,7 +582,7 @@ public final class PException extends AbstractTruffleException {
                     @Shared @Cached ExceptionNodes.GetContextNode getContextNode,
                     @Shared @Cached ExceptionNodes.GetSuppressContextNode getSuppressContextNode,
                     @Shared @Cached ExceptionNodes.GetCauseNode getCauseNode,
-                    @Exclusive @Cached InlinedBranchProfile unsupportedProfile,
+                    @Shared @Cached InlinedBranchProfile unsupportedProfile,
                     @Shared("gil") @Cached GilNode gil) throws UnsupportedMessageException {
         boolean mustRelease = gil.acquire();
         try {
@@ -582,5 +603,19 @@ public final class PException extends AbstractTruffleException {
 
     public void dontTraceOnReraise() {
         shouldTrace = true;
+    }
+
+    public boolean isReraised() {
+        return reraised;
+    }
+
+    @TruffleBoundary
+    public static PException raiseUnboundLocalException(BytecodeNode bytecodeNode, LocalVariable localVariable) {
+        Object info = localVariable.getInfo();
+        if (info == null || !(info instanceof Integer i)) {
+            throw CompilerDirectives.shouldNotReachHere("User locals must have their info field set to a varnames index.");
+        }
+        TruffleString localName = ((PBytecodeDSLRootNode) bytecodeNode.getRootNode()).getCodeUnit().varnames[i];
+        throw PRaiseNode.raiseStatic(bytecodeNode, PythonBuiltinClassType.UnboundLocalError, ErrorMessages.LOCAL_VAR_REFERENCED_BEFORE_ASSIGMENT, localName);
     }
 }

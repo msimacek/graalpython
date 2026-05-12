@@ -5,6 +5,7 @@ import re
 import signal
 import threading
 import unittest
+import os
 from test.test_asyncio import utils as test_utils
 from unittest import mock
 from unittest.mock import patch
@@ -213,6 +214,7 @@ class RunTests(BaseTest):
         self.assertTrue(policy.set_event_loop.called)
 
     def test_asyncio_run_without_uncancel(self):
+        if os.environ.get("GITHUB_CI"): self.skipTest("Crashes runner on GitHub CI")
         # See https://github.com/python/cpython/issues/95097
         class Task:
             def __init__(self, loop, coro, **kwargs):
@@ -417,6 +419,7 @@ class RunnerTests(BaseTest):
                 runner.run(coro())
 
     def test_interrupt_wait(self):
+        if os.environ.get("GITHUB_CI"): self.skipTest("Crashes runner on GitHub CI")
         # interrupting when waiting a future cancels both future and main task
         assert threading.current_thread() is threading.main_thread()
 

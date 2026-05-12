@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -99,6 +99,44 @@ typedef struct {
 
 // defined in 'unicodeobject.c'
 void unicode_dealloc(PyObject *unicode);
+
+Py_LOCAL_SYMBOL NO_INLINE void
+graalpy_dealloc_stack_grow(PyThreadState *tstate)
+{
+    size_t old_capacity;
+    size_t new_capacity;
+
+    assert(tstate != NULL);
+
+    old_capacity = (size_t)tstate->graalpy_deallocating.capacity;
+    new_capacity = old_capacity > 0 ? old_capacity * 2 : 3;
+    if (new_capacity <= old_capacity || new_capacity > INT_MAX) {
+        Py_FatalError("GraalPy deallocating stack capacity overflow");
+    }
+
+    if (GraalPyPrivate_DeallocStack_Grow(tstate, new_capacity) != 0) {
+        Py_FatalError("out of memory while growing GraalPy deallocating stack");
+    }
+}
+
+Py_LOCAL_SYMBOL void
+graalpy_dealloc_stack_push(PyThreadState *tstate, PyObject *op)
+{
+    assert(tstate != NULL);
+    if (UNLIKELY(tstate->graalpy_deallocating.len >= tstate->graalpy_deallocating.capacity)) {
+        graalpy_dealloc_stack_grow(tstate);
+    }
+    tstate->graalpy_deallocating.items[tstate->graalpy_deallocating.len++] = op;
+}
+
+Py_LOCAL_SYMBOL void
+graalpy_dealloc_stack_pop(PyThreadState *tstate, PyObject *op)
+{
+    assert(tstate != NULL);
+    assert(tstate->graalpy_deallocating.len > 0);
+    assert(tstate->graalpy_deallocating.items[tstate->graalpy_deallocating.len - 1] == op);
+    tstate->graalpy_deallocating.items[--tstate->graalpy_deallocating.len] = NULL;
+}
 
 static void object_dealloc(PyObject *self) {
     Py_TYPE(self)->tp_free(self);
@@ -216,7 +254,7 @@ uint32_t Py_Truffle_Options;
 #undef bool
 static void initialize_builtin_types_and_structs() {
 	clock_t t = clock();
-    GraalPyPrivate_Log(PY_TRUFFLE_LOG_FINE, "initialize_builtin_types_and_structs...");
+    GraalPyPrivate_Log(GRAALPY_LOG_FINE, "initialize_builtin_types_and_structs...");
 	static int64_t builtin_types[] = {
 #define PY_TRUFFLE_TYPE_GENERIC(GLOBAL_NAME, __TYPE_NAME__, a, b, c, d, e, f, g) &GLOBAL_NAME, __TYPE_NAME__,
 #define PY_TRUFFLE_TYPE_EXTERN(GLOBAL_NAME, __TYPE_NAME__) &GLOBAL_NAME, __TYPE_NAME__,
@@ -233,7 +271,7 @@ static void initialize_builtin_types_and_structs() {
 	// fix up for circular dependency:
 	PyType_Type.tp_base = &PyBaseObject_Type;
 
-	GraalPyPrivate_Log(PY_TRUFFLE_LOG_FINE, "initialize_builtin_types_and_structs: %fs", ((double) (clock() - t)) / CLOCKS_PER_SEC);
+	GraalPyPrivate_Log(GRAALPY_LOG_FINE, "initialize_builtin_types_and_structs: %fs", ((double) (clock() - t)) / CLOCKS_PER_SEC);
  }
 
 int mmap_getbuffer(PyObject *self, Py_buffer *view, int flags) {
@@ -246,7 +284,7 @@ int mmap_getbuffer(PyObject *self, Py_buffer *view, int flags) {
 }
 
 PyAPI_FUNC(void) GraalPyPrivate_MMap_InitBufferProtocol(PyObject* mmap_type) {
-	GraalPyPrivate_Log(PY_TRUFFLE_LOG_FINE, "GraalPyPrivate_MMap_InitBufferProtocol");
+	GraalPyPrivate_Log(GRAALPY_LOG_FINE, "GraalPyPrivate_MMap_InitBufferProtocol");
 	assert(PyType_Check(mmap_type));
 
 	static PyBufferProcs mmap_as_buffer = {
@@ -272,9 +310,13 @@ PyObject* _Py_NotImplementedStructReference;
  */
 THREAD_LOCAL PyThreadState *tstate_current = NULL;
 
-static void initialize_globals() {
-    // store the thread state into a thread local variable
-    tstate_current = GraalPyPrivate_ThreadState_Get(&tstate_current);
+PyAPI_FUNC(PyThreadState **) GraalPyPrivate_InitThreadStateCurrent(PyThreadState *tstate) {
+    tstate_current = tstate;
+    return &tstate_current;
+}
+
+static void initialize_globals(PyThreadState *tstate) {
+    GraalPyPrivate_InitThreadStateCurrent(tstate);
     _Py_NoneStructReference = GraalPyPrivate_None();
     _Py_NotImplementedStructReference = GraalPyPrivate_NotImplemented();
     _Py_EllipsisObjectReference = GraalPyPrivate_Ellipsis();
@@ -391,7 +433,7 @@ GraalPyPrivate_SUBREF(intptr_t ptr, Py_ssize_t value)
 
     Py_ssize_t new_value = ((obj->ob_refcnt) -= value);
     if (new_value == 0) {
-        GraalPyPrivate_Log(PY_TRUFFLE_LOG_FINER, "%s: _Py_Dealloc(0x%zx)",
+        GraalPyPrivate_Log(GRAALPY_LOG_FINER, "%s: _Py_Dealloc(0x%zx)",
                 __func__, obj);
         _Py_Dealloc(obj);
     }
@@ -409,7 +451,7 @@ GraalPyPrivate_BulkDealloc(intptr_t ptrArray[], int64_t len)
 {
     for (int i = 0; i < len; i++) {
         PyObject *obj = (PyObject *)ptrArray[i];
-        GraalPyPrivate_Log(PY_TRUFFLE_LOG_FINER,
+        GraalPyPrivate_Log(GRAALPY_LOG_FINER,
                            "%s: _Py_Dealloc(a %s at 0x%zx)",
                            __func__, Py_TYPE(obj)->tp_name, obj);
         _Py_Dealloc(obj);
@@ -434,7 +476,7 @@ GraalPyPrivate_BulkDeallocOnShutdown(intptr_t ptrArray[], int64_t len)
             /* we don't need to care about objects with default deallocation
                process */
             obj->ob_refcnt = 0;
-            GraalPyPrivate_Log(PY_TRUFFLE_LOG_FINER, "%s: _Py_Dealloc(0x%zx)",
+            GraalPyPrivate_Log(GRAALPY_LOG_FINER, "%s: _Py_Dealloc(0x%zx)",
                     __func__, obj);
             _Py_Dealloc(obj);
         }
@@ -498,108 +540,6 @@ PyAPI_FUNC(size_t) GraalPyPrivate_GetCurrentRSS() {
 }
 
 
-#define ReadMember(object, offset, T) ((T*)(((char*)object) + offset))[0]
-
-PyAPI_FUNC(int) GraalPyPrivate_ReadShortMember(void* object, Py_ssize_t offset) {
-    return ReadMember(object, offset, short);
-}
-
-PyAPI_FUNC(int) GraalPyPrivate_ReadIntMember(void* object, Py_ssize_t offset) {
-    return ReadMember(object, offset, int);
-}
-
-PyAPI_FUNC(long) GraalPyPrivate_ReadLongMember(void* object, Py_ssize_t offset) {
-    return ReadMember(object, offset, long);
-}
-
-PyAPI_FUNC(double) GraalPyPrivate_ReadFloatMember(void* object, Py_ssize_t offset) {
-    return ReadMember(object, offset, float);
-}
-
-PyAPI_FUNC(double) GraalPyPrivate_ReadDoubleMember(void* object, Py_ssize_t offset) {
-    return ReadMember(object, offset, double);
-}
-
-PyAPI_FUNC(void*) GraalPyPrivate_ReadPointerMember(void* object, Py_ssize_t offset) {
-    return ReadMember(object, offset, void*);
-}
-
-PyAPI_FUNC(int) GraalPyPrivate_ReadCharMember(void* object, Py_ssize_t offset) {
-    return ReadMember(object, offset, char);
-}
-
-#define WriteMember(object, offset, value, T) *(T*)(((char*)object) + offset) = (T)(value)
-
-PyAPI_FUNC(int) GraalPyPrivate_WriteShortMember(void* object, Py_ssize_t offset, short value) {
-    WriteMember(object, offset, value, short);
-    return 0;
-}
-
-PyAPI_FUNC(int) GraalPyPrivate_WriteIntMember(void* object, Py_ssize_t offset, int value) {
-    WriteMember(object, offset, value, int);
-    return 0;
-}
-
-PyAPI_FUNC(int) GraalPyPrivate_WriteLongMember(void* object, Py_ssize_t offset, long value) {
-    WriteMember(object, offset, value, long);
-    return 0;
-}
-
-PyAPI_FUNC(int) GraalPyPrivate_WriteFloatMember(void* object, Py_ssize_t offset, double value) {
-    WriteMember(object, offset, value, float);
-    return 0;
-}
-
-PyAPI_FUNC(int) GraalPyPrivate_WriteDoubleMember(void* object, Py_ssize_t offset, double value) {
-    WriteMember(object, offset, value, double);
-    return 0;
-}
-
-PyAPI_FUNC(int) GraalPyPrivate_WriteObjectMember(void* object, Py_ssize_t offset, PyObject* value) {
-    /* We first need to decref the old value. */
-    PyObject *oldv = ReadMember(object, offset, PyObject*);
-    Py_XINCREF(value);
-    WriteMember(object, offset, value, PyObject*);
-    Py_XDECREF(oldv);
-    return 0;
-}
-
-PyAPI_FUNC(int) GraalPyPrivate_WritePointerMember(void* object, Py_ssize_t offset, void* value) {
-    WriteMember(object, offset, value, void*);
-    return 0;
-}
-
-PyAPI_FUNC(int) GraalPyPrivate_WriteCharMember(void* object, Py_ssize_t offset, char value) {
-    WriteMember(object, offset, value, char);
-    return 0;
-}
-
-#undef ReadMember
-#undef WriteMember
-
-PyAPI_FUNC(int) GraalPyPrivate_PointerCompare(void* x, void* y, int op) {
-    switch (op) {
-    case Py_LT:
-        return x < y;
-    case Py_LE:
-        return x <= y;
-    case Py_EQ:
-        return x == y;
-    case Py_NE:
-        return x != y;
-    case Py_GT:
-        return x > y;
-    case Py_GE:
-        return x >= y;
-    default:
-        return -1;
-    }
-}
-
-PyAPI_FUNC(void*) GraalPyPrivate_PointerAddOffset(void* x, Py_ssize_t y) {
-    return (char *)x + y;
-}
-
 // Implements the basesisze check in typeobject.c:_PyObject_GetState
 PyAPI_FUNC(int) GraalPyPrivate_CheckBasicsizeForGetstate(PyTypeObject* type, int slot_num) {
     Py_ssize_t basicsize = PyBaseObject_Type.tp_basicsize;
@@ -618,10 +558,6 @@ PyAPI_FUNC(void) GraalPyPrivate_CheckTypeReady(PyTypeObject* type) {
     }
 }
 
-PyAPI_FUNC(void*) GraalPyPrivate_VaArgPointer(va_list* va) {
-	return va_arg(*va, void*);
-}
-
 PyAPI_FUNC(int) GraalPyPrivate_NoOpClear(PyObject* o) {
     return 0;
 }
@@ -638,26 +574,12 @@ void initialize_hashes();
 void _PyFloat_InitState(PyInterpreterState* state);
 
 /*
- * This is used to allow Truffle to enter/leave the context on native threads
- * that were not created by NFI/Truffle/Java and thus not previously attached
- * to the context. See e.g. PyGILState_Ensure. This is used by some C
- * extensions to allow calling Python APIs from natively created threads. This
- * poses a problem if multiple contexts use the same library, since we cannot
- * know which context should be entered. CPython has the same problem (see
- * https://docs.python.org/3/c-api/init.html#bugs-and-caveats), in particular
- * the following quote:
- *
- *   Furthermore, extensions (such as ctypes) using these APIs to allow calling
- *   of Python code from non-Python created threads will probably be broken
- *   when using sub-interpreters.
- *
- * If we try to use the same libpython for multiple contexts, we can only
- * behave in a similar (likely broken) way as CPython: natively created threads
- * that use the PyGIL_* APIs to allow calling into Python will attach to the
- * first interpreter that initialized the C API (and thus set the
- * TRUFFLE_CONTEXT pointer) only.
+ * These functions allow Truffle to enter/leave the context on native threads
+ * that were not created by Truffle/Java and thus do not have a previously
+ * entered polyglot context. See e.g. PyGILState_Ensure.
  */
-Py_LOCAL_SYMBOL TruffleContext* TRUFFLE_CONTEXT;
+Py_LOCAL_SYMBOL graalpy_attach_native_thread_func graalpy_attach_native_thread = NULL;
+Py_LOCAL_SYMBOL graalpy_detach_native_thread_func graalpy_detach_native_thread = NULL;
 
 /*
  * This is only set during VM shutdown, so on the native side can only be used
@@ -667,14 +589,14 @@ Py_LOCAL_SYMBOL TruffleContext* TRUFFLE_CONTEXT;
  */
 Py_LOCAL_SYMBOL int8_t *_graalpy_finalizing = NULL;
 
-PyAPI_FUNC(void) initialize_graal_capi(TruffleEnv* env, void **builtin_closures, GCState *gc) {
+PyAPI_FUNC(PyThreadState **) initialize_graal_capi(void **builtin_closures, GCState *gc,
+                PyThreadState *tstate, graalpy_attach_native_thread_func attach_native_thread,
+                graalpy_detach_native_thread_func detach_native_thread) {
     clock_t t = clock();
 
-    if (env) {
-        TRUFFLE_CONTEXT = (*env)->getTruffleContext(env);
-    }
-
     _PyGC_InitState(gc);
+    graalpy_attach_native_thread = attach_native_thread;
+    graalpy_detach_native_thread = detach_native_thread;
 
     /*
      * Initializing all these global fields with pointers to different contexts
@@ -701,12 +623,12 @@ PyAPI_FUNC(void) initialize_graal_capi(TruffleEnv* env, void **builtin_closures,
      * context exits and its table is the "latest", we delay freeing it.
      */
     initialize_builtins(builtin_closures);
-    GraalPyPrivate_Log(PY_TRUFFLE_LOG_FINE, "initialize_builtins: %fs", ((double) (clock() - t)) / CLOCKS_PER_SEC);
+    GraalPyPrivate_Log(GRAALPY_LOG_FINE, "initialize_builtins: %fs", ((double) (clock() - t)) / CLOCKS_PER_SEC);
     Py_Truffle_Options = GraalPyPrivate_Native_Options();
 
     initialize_builtin_types_and_structs();
     // initialize global variables like '_Py_NoneStruct', etc.
-    initialize_globals();
+    initialize_globals(tstate);
     initialize_exceptions();
     initialize_hashes();
     initialize_bufferprocs();
@@ -716,7 +638,8 @@ PyAPI_FUNC(void) initialize_graal_capi(TruffleEnv* env, void **builtin_closures,
     // TODO: initialize during cext initialization doesn't work at the moment
     Py_FileSystemDefaultEncoding = "utf-8"; // strdup(PyUnicode_AsUTF8(GraalPyPrivate_FileSystemDefaultEncoding()));
 
-    GraalPyPrivate_Log(PY_TRUFFLE_LOG_FINE, "initialize_graal_capi: %fs", ((double) (clock() - t)) / CLOCKS_PER_SEC);
+    GraalPyPrivate_Log(GRAALPY_LOG_FINE, "initialize_graal_capi: %fs", ((double) (clock() - t)) / CLOCKS_PER_SEC);
+    return &tstate_current;
 }
 
 /*

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,13 +40,33 @@
  */
 package com.oracle.graal.python.builtins.modules.datetime;
 
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ValueError;
+import static com.oracle.graal.python.builtins.modules.datetime.DatetimeModuleBuiltins.MAX_YEAR;
+import static com.oracle.graal.python.builtins.modules.datetime.DatetimeModuleBuiltins.MIN_YEAR;
+
+import java.lang.ref.Reference;
+import java.time.YearMonth;
+
+import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
+import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
+import com.oracle.graal.python.builtins.objects.cext.capi.CApiContext;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionInvoker;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionNodes;
+import com.oracle.graal.python.builtins.objects.cext.capi.NativeCAPISymbol;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTiming;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions;
+import com.oracle.graal.python.builtins.objects.cext.structs.CFields;
+import com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes;
-import com.oracle.graal.python.lib.PyLongAsLongNode;
+import com.oracle.graal.python.lib.PyLongAsIntNode;
+import com.oracle.graal.python.runtime.nativeaccess.NativeMemory;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.call.CallNode;
+import com.oracle.graal.python.runtime.IndirectCallData.BoundaryCallData;
+import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Fallback;
@@ -58,12 +78,6 @@ import com.oracle.truffle.api.nodes.EncapsulatingNodeReference;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.object.Shape;
 
-import java.time.YearMonth;
-
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ValueError;
-import static com.oracle.graal.python.builtins.modules.datetime.DatetimeModuleBuiltins.MAX_YEAR;
-import static com.oracle.graal.python.builtins.modules.datetime.DatetimeModuleBuiltins.MIN_YEAR;
-
 public class DateNodes {
 
     @GenerateUncached
@@ -71,10 +85,10 @@ public class DateNodes {
     @GenerateCached(false)
     public abstract static class NewNode extends Node {
 
-        public abstract PDate execute(Node inliningTarget, Object cls, Object yearObject, Object monthObject, Object dayObject);
+        public abstract Object execute(Node inliningTarget, Object cls, Object yearObject, Object monthObject, Object dayObject);
 
         @Specialization
-        static PDate newDate(Node inliningTarget, Object cls, Object yearObject, Object monthObject, Object dayObject) {
+        static Object newDate(Node inliningTarget, Object cls, Object yearObject, Object monthObject, Object dayObject) {
             EncapsulatingNodeReference encapsulating = EncapsulatingNodeReference.getCurrent();
             Node encapsulatingNode = encapsulating.set(inliningTarget);
             try {
@@ -88,10 +102,10 @@ public class DateNodes {
         }
 
         @TruffleBoundary
-        private static PDate newDateBoundary(Node inliningTarget, Object cls, Object yearObject, Object monthObject, Object dayObject) {
-            long year = PyLongAsLongNode.executeUncached(yearObject);
-            long month = PyLongAsLongNode.executeUncached(monthObject);
-            long day = PyLongAsLongNode.executeUncached(dayObject);
+        private static Object newDateBoundary(Node inliningTarget, Object cls, Object yearObject, Object monthObject, Object dayObject) {
+            int year = PyLongAsIntNode.executeUncached(yearObject);
+            int month = PyLongAsIntNode.executeUncached(monthObject);
+            int day = PyLongAsIntNode.executeUncached(dayObject);
 
             if (year < MIN_YEAR || year > MAX_YEAR) {
                 throw PRaiseNode.raiseStatic(inliningTarget, ValueError, ErrorMessages.YEAR_D_IS_OUT_OF_RANGE, year);
@@ -101,12 +115,11 @@ public class DateNodes {
                 throw PRaiseNode.raiseStatic(inliningTarget, ValueError, ErrorMessages.MONTH_MUST_BE_IN);
             }
 
-            if (day <= 0 || day > getMaxDayOfMonth((int) year, (int) month)) {
+            if (day <= 0 || day > getMaxDayOfMonth(year, month)) {
                 throw PRaiseNode.raiseStatic(inliningTarget, ValueError, ErrorMessages.DAY_IS_OUT_OF_RANGE_FOR_MONTH);
             }
 
-            Shape shape = TypeNodes.GetInstanceShape.executeUncached(cls);
-            return new PDate(cls, shape, (int) year, (int) month, (int) day);
+            return NewUnsafeNode.executeUncached(cls, year, month, day);
         }
 
         @TruffleBoundary
@@ -120,14 +133,37 @@ public class DateNodes {
     @GenerateInline
     @GenerateCached(false)
     public abstract static class NewUnsafeNode extends Node {
+        private static final CApiTiming C_API_TIMING = CApiTiming.create(true, NativeCAPISymbol.FUN_DATE_SUBTYPE_NEW);
 
-        public abstract PDate execute(Node inliningTarget, Object cls, int year, int month, int day);
+        public abstract Object execute(Node inliningTarget, Object cls, int year, int month, int day);
+
+        public static Object executeUncached(Object cls, int year, int month, int day) {
+            return DateNodesFactory.NewUnsafeNodeGen.getUncached().execute(null, cls, year, month, day);
+        }
 
         @Specialization
-        static PDate newDate(Node inliningTarget, Object cls, int year, int month, int day,
-                        @Cached TypeNodes.GetInstanceShape getInstanceShape) {
-            Shape shape = getInstanceShape.execute(cls);
-            return new PDate(cls, shape, year, month, day);
+        static Object newDate(Node inliningTarget, Object cls, int year, int month, int day,
+                        @Cached TypeNodes.GetInstanceShape getInstanceShape,
+                        @Cached TypeNodes.NeedsNativeAllocationNode needsNativeAllocationNode,
+                        @Cached ExternalFunctionNodes.PyObjectCheckFunctionResultNode checkFunctionResultNode,
+                        @Cached CApiTransitions.PythonToNativeNode toNativeNode,
+                        @Cached CApiTransitions.NativeToPythonTransferNode fromNativeNode) {
+            if (!needsNativeAllocationNode.execute(inliningTarget, cls)) {
+                Shape shape = getInstanceShape.execute(cls);
+                return new PDate(cls, shape, year, month, day);
+            } else {
+                long clsPointer = toNativeNode.executeLong(cls);
+                try {
+                    PythonContext context = PythonContext.get(inliningTarget);
+                    var callable = CApiContext.getNativeSymbol(inliningTarget, NativeCAPISymbol.FUN_DATE_SUBTYPE_NEW);
+                    long nativeResult = ExternalFunctionInvoker.invokeDATE_SUBTYPE_NEW(null, C_API_TIMING,
+                                    context.ensureNativeContext(), BoundaryCallData.getUncached(), context.getThreadState(PythonLanguage.get(inliningTarget)), callable, clsPointer,
+                                    year, month, day);
+                    return checkFunctionResultNode.execute(context, NativeCAPISymbol.FUN_DATE_SUBTYPE_NEW.getTsName(), fromNativeNode.execute(nativeResult));
+                } finally {
+                    Reference.reachabilityFence(cls);
+                }
+            }
         }
     }
 
@@ -150,7 +186,7 @@ public class DateNodes {
 
         @Fallback
         @TruffleBoundary
-        static Object newDateGeneric(Node inliningTarget, Object cls, Object yearObject, Object monthObject, Object dayObject) {
+        static Object newDateGeneric(Object cls, Object yearObject, Object monthObject, Object dayObject) {
             return CallNode.executeUncached(cls, yearObject, monthObject, dayObject);
         }
 
@@ -158,4 +194,24 @@ public class DateNodes {
             return PGuards.isBuiltinClass(cls, PythonBuiltinClassType.PDate);
         }
     }
+
+    public static final class FromNative {
+        static int getYear(PythonAbstractNativeObject self) {
+            long ptr = CStructAccess.getFieldPtr(self.getPtr(), CFields.PyDateTime_Date__data);
+            int b0 = NativeMemory.readByteArrayElement(ptr, 0) & 0xFF;
+            int b1 = NativeMemory.readByteArrayElement(ptr, 1) & 0xFF;
+            return b0 << 8 | b1;
+        }
+
+        static int getMonth(PythonAbstractNativeObject self) {
+            long ptr = CStructAccess.getFieldPtr(self.getPtr(), CFields.PyDateTime_Date__data);
+            return NativeMemory.readByteArrayElement(ptr, 2) & 0xFF;
+        }
+
+        static int getDay(PythonAbstractNativeObject self) {
+            long ptr = CStructAccess.getFieldPtr(self.getPtr(), CFields.PyDateTime_Date__data);
+            return NativeMemory.readByteArrayElement(ptr, 3) & 0xFF;
+        }
+    }
+
 }

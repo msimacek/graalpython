@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,6 +41,7 @@
 package com.oracle.graal.python.nodes.attributes;
 
 import static com.oracle.graal.python.builtins.objects.cext.structs.CFields.PyTypeObject__tp_dict;
+import static com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.readLongField;
 import static com.oracle.graal.python.builtins.objects.object.PythonObject.HAS_NO_VALUE_PROPERTIES;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.TypeError;
 
@@ -103,6 +104,7 @@ public abstract class WriteAttributeToObjectNode extends PNodeWithContext {
     static boolean writeToDynamicStorageNoType(PythonObject object, TruffleString key, Object value,
                     @SuppressWarnings("unused") @Shared("getDict") @Cached GetDictIfExistsNode getDict,
                     @Cached WriteAttributeToPythonObjectNode writeNode) {
+        assert object.checkDictFlags(null);
         // Objects w/o dict that are not classes do not have any special handling
         writeNode.execute(object, key, value);
         return true;
@@ -136,11 +138,11 @@ public abstract class WriteAttributeToObjectNode extends PNodeWithContext {
                     @SuppressWarnings("unused") @Shared("getDict") @Cached GetDictIfExistsNode getDict,
                     @Exclusive @Cached InlinedBranchProfile updateFlags,
                     @Cached DynamicObject.PutNode putNode,
-                    @Cached DynamicObject.GetShapeFlagsNode getShapeFlagsNode,
                     @Cached DynamicObject.SetShapeFlagsNode setShapeFlagsNode) {
+        assert klass.checkDictFlags(null);
         if (value == PNone.NO_VALUE) {
             updateFlags.enter(inliningTarget);
-            klass.addShapeFlag(HAS_NO_VALUE_PROPERTIES, getShapeFlagsNode, setShapeFlagsNode);
+            setShapeFlagsNode.executeAdd(klass, HAS_NO_VALUE_PROPERTIES);
         }
         return writeToDynamicStorageManagedClass(klass, key, value, putNode);
     }
@@ -163,6 +165,7 @@ public abstract class WriteAttributeToObjectNode extends PNodeWithContext {
                     @Bind("getDict.execute(object)") PDict dict,
                     @Shared("updateStorage") @Cached InlinedBranchProfile updateStorage,
                     @Shared("setHashingStorageItem") @Cached HashingStorageSetItem setHashingStorageItem) {
+        assert object.checkDictFlags(dict);
         return writeToDict(dict, key, value, inliningTarget, updateStorage, setHashingStorageItem);
     }
 
@@ -173,6 +176,7 @@ public abstract class WriteAttributeToObjectNode extends PNodeWithContext {
                     @Bind("getDict.execute(klass)") PDict dict,
                     @Shared("updateStorage") @Cached InlinedBranchProfile updateStorage,
                     @Shared("setHashingStorageItem") @Cached HashingStorageSetItem setHashingStorageItem) {
+        assert klass.checkDictFlags(dict);
         return writeToDictManagedClass(klass, dict, key, value, inliningTarget, updateStorage, setHashingStorageItem);
     }
 
@@ -183,6 +187,7 @@ public abstract class WriteAttributeToObjectNode extends PNodeWithContext {
                     @SuppressWarnings("unused") @Shared("getDict") @Cached GetDictIfExistsNode getDict,
                     @Bind("getDict.execute(obj)") PDict dict,
                     @Cached HashingStorageNodes.HashingStorageDelItem hashingStorageDelItem) {
+        assert obj.checkDictFlags(dict);
         try {
             HashingStorage dictStorage = dict.getDictStorage();
             return hashingStorageDelItem.execute(inliningTarget, dictStorage, key, dict);
@@ -220,9 +225,8 @@ public abstract class WriteAttributeToObjectNode extends PNodeWithContext {
     }
 
     private static void checkNativeImmutable(Node inliningTarget, PythonAbstractNativeObject object, TruffleString key,
-                    CStructAccess.ReadI64Node getNativeFlags,
                     PRaiseNode raiseNode) {
-        long flags = getNativeFlags.readFromObj(object, CFields.PyTypeObject__tp_flags);
+        long flags = readLongField(object.getPtr(), CFields.PyTypeObject__tp_flags);
         if ((flags & TypeFlags.IMMUTABLETYPE) != 0) {
             throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.CANT_SET_ATTRIBUTE_R_OF_IMMUTABLE_TYPE_N, key, object);
         }
@@ -233,7 +237,6 @@ public abstract class WriteAttributeToObjectNode extends PNodeWithContext {
                     @Bind Node inliningTarget,
                     @Cached InlinedConditionProfile isTypeProfile,
                     @Shared("getDict") @Cached GetDictIfExistsNode getDict,
-                    @Cached CStructAccess.ReadI64Node getNativeFlags,
                     @Cached CStructAccess.ReadObjectNode getNativeDict,
                     @Exclusive @Cached HashingStorageSetItem setHashingStorageItem,
                     @Exclusive @Cached InlinedBranchProfile updateStorage,
@@ -243,7 +246,7 @@ public abstract class WriteAttributeToObjectNode extends PNodeWithContext {
         try {
             Object dict;
             if (isType) {
-                checkNativeImmutable(inliningTarget, object, key, getNativeFlags, raiseNode);
+                checkNativeImmutable(inliningTarget, object, key, raiseNode);
                 /*
                  * For native types, the type attributes are stored in a dict that is located in
                  * 'typePtr->tp_dict'. So, this is different to a native object (that is not a type)

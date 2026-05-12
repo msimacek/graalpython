@@ -1,4 +1,4 @@
-# Copyright (c) 2024, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2024, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -37,6 +37,42 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 import sys
+import unittest
+
+IS_BYTECODE_DSL = sys.implementation.name == 'graalpy' and __graalpython__.is_bytecode_dsl_interpreter
+
+
+def _is_sandboxed():
+    return (
+        sys.implementation.name == 'graalpy' and
+        __graalpython__.posix_module_backend() == 'java' and
+        __graalpython__.sha3_module_backend() == 'java' and
+        __graalpython__.pyexpat_module_backend() == 'java'
+    )
+
+
+def skip_if_sandboxed(reason=''):
+    def wrapper(test):
+        if _is_sandboxed():
+            return unittest.skip(f"Skipped in sandboxed configuration. {reason}")(test)
+        return test
+    return wrapper
+
+
+def skipIfBytecodeDSL(reason=''):
+    def wrapper(test):
+        if IS_BYTECODE_DSL:
+            return unittest.skip(f"Skipped on Bytecode DSL interpreter. {reason}")(test)
+        return test
+    return wrapper
+
+
+def skipUnlessBytecodeDSL(reason=''):
+    def wrapper(test):
+        if sys.implementation.name == 'graalpy' and not __graalpython__.is_bytecode_dsl_interpreter:
+            return unittest.skip(f"Skipped on manual interpreter. {reason}")(test)
+        return test
+    return wrapper
 
 
 def storage_to_native(s):

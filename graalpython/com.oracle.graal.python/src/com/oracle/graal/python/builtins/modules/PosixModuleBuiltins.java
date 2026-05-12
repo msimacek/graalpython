@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2025, Oracle and/or its affiliates.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2014, Regents of the University of California
  *
  * All rights reserved.
@@ -100,6 +100,7 @@ import com.oracle.graal.python.nodes.PConstructAndRaiseNode;
 import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.call.special.LookupAndCallUnaryNode;
+import com.oracle.graal.python.nodes.call.special.SpecialMethodNotFound;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryBuiltinNode;
@@ -1229,9 +1230,9 @@ public final class PosixModuleBuiltins extends PythonBuiltins {
                         @Bind Node inliningTarget,
                         @Bind PythonContext context,
                         @CachedLibrary("context.getPosixSupport()") PosixSupportLibrary posixLib,
-                        @Shared @Cached SysModuleBuiltins.AuditNode auditNode,
-                        @Shared @Cached GilNode gil,
-                        @Shared @Cached PConstructAndRaiseNode.Lazy constructAndRaiseNode) {
+                        @Exclusive @Cached SysModuleBuiltins.AuditNode auditNode,
+                        @Exclusive @Cached GilNode gil,
+                        @Exclusive @Cached PConstructAndRaiseNode.Lazy constructAndRaiseNode) {
             auditNode.audit(inliningTarget, "os.truncate", path.originalObject, length);
             try {
                 gil.release(true);
@@ -1251,10 +1252,10 @@ public final class PosixModuleBuiltins extends PythonBuiltins {
                         @Bind Node inliningTarget,
                         @Bind PythonContext context,
                         @CachedLibrary("context.getPosixSupport()") PosixSupportLibrary posixLib,
-                        @Shared @Cached SysModuleBuiltins.AuditNode auditNode,
-                        @Shared @Cached GilNode gil,
-                        @Cached InlinedBranchProfile errorProfile,
-                        @Shared @Cached PConstructAndRaiseNode.Lazy constructAndRaiseNode) {
+                        @Exclusive @Cached SysModuleBuiltins.AuditNode auditNode,
+                        @Exclusive @Cached GilNode gil,
+                        @Exclusive @Cached InlinedBranchProfile errorProfile,
+                        @Exclusive @Cached PConstructAndRaiseNode.Lazy constructAndRaiseNode) {
             return FtruncateNode.ftruncate(frame, fd.fd, length, inliningTarget, context, posixLib, auditNode, gil, errorProfile, constructAndRaiseNode);
         }
     }
@@ -2019,7 +2020,7 @@ public final class PosixModuleBuiltins extends PythonBuiltins {
         @Specialization(guards = {"isNoValue(ns)"})
         static long[] times(VirtualFrame frame, PTuple times, @SuppressWarnings("unused") PNone ns,
                         @Bind Node inliningTarget,
-                        @Shared @Cached SequenceStorageNodes.GetItemScalarNode getItemNode,
+                        @Exclusive @Cached SequenceStorageNodes.GetItemScalarNode getItemNode,
                         @Cached ObjectToTimespecNode objectToTimespecNode,
                         @Exclusive @Cached PRaiseNode raiseNode) {
             return convertToTimespec(frame, inliningTarget, times, getItemNode, objectToTimespecNode, raiseNode);
@@ -2028,7 +2029,7 @@ public final class PosixModuleBuiltins extends PythonBuiltins {
         @Specialization
         static long[] ns(VirtualFrame frame, @SuppressWarnings("unused") PNone times, PTuple ns,
                         @Bind Node inliningTarget,
-                        @Shared @Cached SequenceStorageNodes.GetItemScalarNode getItemNode,
+                        @Exclusive @Cached SequenceStorageNodes.GetItemScalarNode getItemNode,
                         @Cached SplitLongToSAndNsNode splitLongToSAndNsNode,
                         @Exclusive @Cached PRaiseNode raiseNode) {
             return convertToTimespec(frame, inliningTarget, ns, getItemNode, splitLongToSAndNsNode, raiseNode);
@@ -3487,8 +3488,10 @@ public final class PosixModuleBuiltins extends PythonBuiltins {
                         @Bind PythonContext context,
                         @CachedLibrary("context.getPosixSupport()") PosixSupportLibrary posixLib,
                         @Exclusive @Cached PRaiseNode raiseNode) {
-            Object pathObject = callFSPath.executeObject(frame, value);
-            if (pathObject == PNone.NO_VALUE) {
+            Object pathObject;
+            try {
+                pathObject = callFSPath.executeObject(frame, value);
+            } catch (SpecialMethodNotFound e) {
                 throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.S_S_SHOULD_BE_S_NOT_P, functionNameWithColon, argumentName,
                                 getAllowedTypes(), value);
             }

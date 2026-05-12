@@ -769,7 +769,7 @@ def captured_stdin():
     return captured_output("stdin")
 
 
-def gc_collect():
+def gc_collect(until = None):
     """Force as many objects as possible to be collected.
 
     In non-CPython implementations of Python, this is needed because timely
@@ -784,9 +784,19 @@ def gc_collect():
     if is_graalpy:
         time.sleep(0.1)
     gc.collect()
-    if is_graalpy:
-        time.sleep(0.1)
-    gc.collect()
+    if until:
+        i = 0
+        while until():
+            if is_graalpy:
+                time.sleep(0.1)
+            gc.collect()
+            i += 1
+            if i > 1000:
+                print("WARNING: timeout while waiting for GC")
+                if is_graalpy and hasattr(__graalpython__, 'dump_heap'):
+                    dump_path = __graalpython__.dump_heap()
+                    print(f"HEAP DUMP: {dump_path}")
+                break
 
 @contextlib.contextmanager
 def disable_gc():
@@ -2470,6 +2480,10 @@ else:
         C_RECURSION_LIMIT = 4000
     else:
         C_RECURSION_LIMIT = 10000
+# GraalPy change: our Java-side recursion checks use sys.getrecursionlimit(),
+# not CPython's separate platform-specific C stack limit.
+if sys.implementation.name == 'graalpy':
+    C_RECURSION_LIMIT = sys.getrecursionlimit()
 
 # Windows doesn't have os.uname() but it doesn't support s390x.
 is_s390x = hasattr(os, 'uname') and os.uname().machine == 's390x'

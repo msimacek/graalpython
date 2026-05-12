@@ -1,4 +1,4 @@
-/* Copyright (c) 2024, 2025, Oracle and/or its affiliates.
+/* Copyright (c) 2024, 2026, Oracle and/or its affiliates.
  * Copyright (C) 1996-2024 Python Software Foundation
  *
  * Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
@@ -1453,8 +1453,6 @@ PyIndex_Check(PyObject *obj)
     return _PyIndex_Check(obj);
 }
 
-
-#if 0 // GraalPy change
 /* Return a Python int from the object item.
    Can return an instance of int subclass.
    Raise TypeError if the result is not an int
@@ -1470,6 +1468,12 @@ _PyNumber_Index(PyObject *item)
     if (PyLong_Check(item)) {
         return Py_NewRef(item);
     }
+
+    // GraalPy change: upcall for managed objects
+    if (points_to_py_handle_space(item)) {
+        return GraalPyPrivate_PyNumber_Index(item);
+    }
+
     if (!_PyIndex_Check(item)) {
         PyErr_Format(PyExc_TypeError,
                      "'%.200s' object cannot be interpreted "
@@ -1511,11 +1515,14 @@ PyNumber_Index(PyObject *item)
 {
     PyObject *result = _PyNumber_Index(item);
     if (result != NULL && !PyLong_CheckExact(result)) {
-        Py_SETREF(result, _PyLong_Copy((PyLongObject *)result));
+        if (points_to_py_handle_space(result)) {
+            Py_SETREF(result, GraalPyPrivate_PyNumber_IndexCopy(result));
+        } else {
+            Py_SETREF(result, _PyLong_Copy((PyLongObject *)result));
+        }
     }
     return result;
 }
-#endif // GraalPy change
 
 /* Return an error on Overflow only if err is not NULL*/
 
@@ -1571,14 +1578,15 @@ PyNumber_AsSsize_t(PyObject *item, PyObject *err)
 }
 
 
-#if 0 // GraalPy change
 PyObject *
 PyNumber_Long(PyObject *o)
 {
+#if 0 // GraalPy change
     PyObject *result;
     PyNumberMethods *m;
     PyObject *trunc_func;
     Py_buffer view;
+#endif // GraalPy change
 
     if (o == NULL) {
         return null_error();
@@ -1587,6 +1595,12 @@ PyNumber_Long(PyObject *o)
     if (PyLong_CheckExact(o)) {
         return Py_NewRef(o);
     }
+
+    /* GraalPy change: The above case already handles boxed long values. Hence,
+       those may not reach this point. */
+    assert (!points_to_py_int_handle(o));
+    return GraalPyPrivate_PyNumber_Long(o);
+#if 0 // GraalPy change
     m = Py_TYPE(o)->tp_as_number;
     if (m && m->nb_int) { /* This should include subclasses of int */
         /* Convert using the nb_int slot, which should return something
@@ -1685,6 +1699,7 @@ PyNumber_Long(PyObject *o)
 
     return type_error("int() argument must be a string, a bytes-like object "
                       "or a real number, not '%.200s'", o);
+#endif // GraalPy change
 }
 
 PyObject *
@@ -1698,6 +1713,19 @@ PyNumber_Float(PyObject *o)
         return Py_NewRef(o);
     }
 
+    // GraalPy change
+    if (points_to_py_float_handle(o)) {
+        assert(Py_REFCNT(o) == _Py_IMMORTAL_REFCNT);
+        return o;
+    }
+    if (points_to_py_int_handle(o)) {
+        assert(Py_REFCNT(o) == _Py_IMMORTAL_REFCNT);
+        return PyFloat_FromDouble(pointer_to_int64(o));
+    }
+
+    return GraalPyPrivate_PyNumber_Float(o);
+
+#if 0 // GraalPy change
     PyNumberMethods *m = Py_TYPE(o)->tp_as_number;
     if (m && m->nb_float) { /* This should include subclasses of float */
         PyObject *res = m->nb_float(o);
@@ -1745,9 +1773,11 @@ PyNumber_Float(PyObject *o)
         return PyFloat_FromDouble(PyFloat_AS_DOUBLE(o));
     }
     return PyFloat_FromString(o);
+#endif // GraalPy change
 }
 
 
+#if 0 // GraalPy change
 PyObject *
 PyNumber_ToBase(PyObject *n, int base)
 {
@@ -2857,10 +2887,15 @@ _PyObject_RealIsSubclass(PyObject *derived, PyObject *cls)
     return recursive_issubclass(derived, cls);
 }
 
-
+#endif // GraalPy change
 PyObject *
 PyObject_GetIter(PyObject *o)
 {
+    // GraalPy change: upcall for managed objects
+    if (points_to_py_handle_space(o)) {
+        return GraalPyPrivate_Object_GetIter(o);
+    }
+
     PyTypeObject *t = Py_TYPE(o);
     getiterfunc f;
 
@@ -2882,7 +2917,7 @@ PyObject_GetIter(PyObject *o)
         return res;
     }
 }
-
+#if 0 // GraalPy change
 PyObject *
 PyObject_GetAIter(PyObject *o) {
     PyTypeObject *t = Py_TYPE(o);
@@ -2901,7 +2936,7 @@ PyObject_GetAIter(PyObject *o) {
     }
     return it;
 }
-
+#endif // GraalPy change
 int
 PyIter_Check(PyObject *obj)
 {
@@ -2909,7 +2944,7 @@ PyIter_Check(PyObject *obj)
     return (tp->tp_iternext != NULL &&
             tp->tp_iternext != &_PyObject_NextNotImplemented);
 }
-
+#if 0 // GraalPy change
 int
 PyAIter_Check(PyObject *obj)
 {

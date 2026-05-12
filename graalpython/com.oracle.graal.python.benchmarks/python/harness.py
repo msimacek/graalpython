@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -41,7 +41,7 @@ from time import time
 
 try:
     # https://docs.python.org/3/library/time.html#time.monotonic
-    # The reference point of the returned value is undefined, 
+    # The reference point of the returned value is undefined,
     # so that **only the difference between the results of two calls is valid**.
     from time import monotonic_ns
     _module_start_time = monotonic_ns()
@@ -143,6 +143,8 @@ def avg(values):
 
 def norm(values):
     _max, _min  = max(values), min(values)
+    if _max == _min:
+        return zeros(len(values))
     return [float(v - _min) / (_max - _min) * 100.0 for v in values]
 
 
@@ -202,6 +204,22 @@ def detect_warmup(values, cp_threshold=0.03, stability_slope_grade=0.01):
     except Exception as e:
         print("exception occurred while detecting warmup: %s" % e)
         return -1
+
+
+def ensure_packages(**package_specs):
+    import sys, os
+
+    rootdir = os.path.dirname(__file__)
+    while os.path.basename(rootdir) != 'graalpython':
+        rootdir = os.path.dirname(rootdir)
+
+    sys.path.append(os.path.join(
+        rootdir,
+        "com.oracle.graal.python.test",
+        "src",
+    ))
+    from tests import ensure_packages
+    ensure_packages(**package_specs)
 
 
 def ccompile(name, code):
@@ -285,6 +303,7 @@ class BenchRunner(object):
             with _io.FileIO(bench_file, "r") as f:
                 bench_module.__file__ = bench_file
                 bench_module.ccompile = ccompile
+                bench_module.ensure_packages = ensure_packages
                 exec(compile(f.readall(), bench_file, "exec"), bench_module.__dict__)
                 return bench_module
 
@@ -487,7 +506,7 @@ def run_benchmark(args):
         else:
             bench_args.append(arg)
         i += 1
-        
+
     if startup and self_measurement:
         raise RuntimeError("It is not allowed to use the startup argument when self_measurement is enabled")
 
@@ -508,6 +527,7 @@ def run_benchmark(args):
 
     if GRAALPYTHON:
         print(f"### using bytecode DSL interpreter: {__graalpython__.is_bytecode_dsl_interpreter}")
+        print(f"### using forced uncached interpreter: {getattr(__graalpython__, "is_forced_uncached_interpreter", False)}")
 
     BenchRunner(bench_file, bench_args=bench_args, iterations=iterations, warmup=warmup, warmup_runs=warmup_runs, startup=startup, live_results=live_results, self_measurement=self_measurement).run()
 

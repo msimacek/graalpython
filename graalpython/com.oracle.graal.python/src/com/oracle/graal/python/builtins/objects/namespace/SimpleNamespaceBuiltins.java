@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,12 +43,10 @@ package com.oracle.graal.python.builtins.objects.namespace;
 import static com.oracle.graal.python.nodes.ErrorMessages.NO_POSITIONAL_ARGUMENTS_EXPECTED;
 import static com.oracle.graal.python.nodes.SpecialAttributeNames.J___DICT__;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE__;
-import static com.oracle.graal.python.nodes.SpecialMethodNames.T___REPR__;
 import static com.oracle.graal.python.nodes.StringLiterals.T_COMMA_SPACE;
 import static com.oracle.graal.python.nodes.StringLiterals.T_EQ;
 import static com.oracle.graal.python.nodes.StringLiterals.T_LPAREN;
 import static com.oracle.graal.python.nodes.StringLiterals.T_RPAREN;
-import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
 import java.util.ArrayList;
@@ -81,22 +79,19 @@ import com.oracle.graal.python.builtins.objects.tuple.PTuple;
 import com.oracle.graal.python.builtins.objects.type.TpSlots;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes;
 import com.oracle.graal.python.builtins.objects.type.slots.TpSlotRichCompare.RichCmpBuiltinNode;
+import com.oracle.graal.python.lib.PyObjectReprAsTruffleStringNode;
 import com.oracle.graal.python.lib.RichCmpOp;
-import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.attributes.WriteAttributeToPythonObjectNode;
-import com.oracle.graal.python.nodes.call.special.LookupAndCallUnaryNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonVarargsBuiltinNode;
 import com.oracle.graal.python.nodes.object.BuiltinClassProfiles.IsBuiltinClassExactProfile;
 import com.oracle.graal.python.nodes.object.GetClassNode;
 import com.oracle.graal.python.nodes.object.GetOrCreateDictNode;
-import com.oracle.graal.python.nodes.util.CannotCastException;
 import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
 import com.oracle.graal.python.runtime.PythonContext;
-import com.oracle.graal.python.runtime.exception.PythonErrorType;
 import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.dsl.Bind;
@@ -111,6 +106,7 @@ import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.api.strings.TruffleStringBuilder;
+import com.oracle.truffle.api.strings.TruffleStringBuilderUTF32;
 
 @CoreFunctions(extendClasses = PythonBuiltinClassType.PSimpleNamespace)
 public final class SimpleNamespaceBuiltins extends PythonBuiltins {
@@ -204,7 +200,7 @@ public final class SimpleNamespaceBuiltins extends PythonBuiltins {
         @CompilerDirectives.ValueType
         protected static final class NSReprState {
             private final HashingStorage dictStorage;
-            private final List<Pair<TruffleString, TruffleString>> items;
+            private final ArrayList<Pair<TruffleString, TruffleString>> items;
 
             @CompilerDirectives.TruffleBoundary
             NSReprState(HashingStorage dictStorage) {
@@ -217,7 +213,7 @@ public final class SimpleNamespaceBuiltins extends PythonBuiltins {
                 items.sort(Comparator.comparing(Pair::getLeft, StringUtils::compareStringsUncached));
             }
 
-            public void appendToTruffleStringBuilder(TruffleStringBuilder sb, TruffleStringBuilder.AppendStringNode appendStringNode) {
+            public void appendToTruffleStringBuilder(TruffleStringBuilderUTF32 sb, TruffleStringBuilder.AppendStringNode appendStringNode) {
                 sortItemsByKey();
                 for (int i = 0; i < items.size(); i++) {
                     Pair<TruffleString, TruffleString> item = items.get(i);
@@ -243,34 +239,25 @@ public final class SimpleNamespaceBuiltins extends PythonBuiltins {
                 return limit;
             }
 
-            protected static TruffleString getReprString(Node inliningTarget, Object obj,
-                            LookupAndCallUnaryNode.LookupAndCallUnaryDynamicNode reprNode,
-                            CastToTruffleStringNode castStr,
-                            PRaiseNode raiseNode) {
-                Object reprObj = reprNode.executeObject(obj, T___REPR__);
-                try {
-                    return castStr.execute(inliningTarget, reprObj);
-                } catch (CannotCastException e) {
-                    throw raiseNode.raise(inliningTarget, PythonErrorType.TypeError, ErrorMessages.RETURNED_NON_STRING, "__repr__", reprObj);
-                }
+            protected static TruffleString getReprString(Frame frame, Node inliningTarget, Object obj,
+                            PyObjectReprAsTruffleStringNode reprNode) {
+                return reprNode.execute(frame, inliningTarget, obj);
             }
 
             @Override
             public abstract NSReprState execute(Frame frame, Node node, HashingStorage storage, HashingStorageIterator it, NSReprState state);
 
             @Specialization
-            public static NSReprState doPStringKey(@SuppressWarnings("unused") Node node, HashingStorage storage, HashingStorageIterator it, NSReprState state,
+            public static NSReprState doPStringKey(Frame frame, @SuppressWarnings("unused") Node node, HashingStorage storage, HashingStorageIterator it, NSReprState state,
                             @Bind Node inliningTarget,
-                            @Cached LookupAndCallUnaryNode.LookupAndCallUnaryDynamicNode valueReprNode,
+                            @Cached PyObjectReprAsTruffleStringNode valueReprNode,
                             @Cached CastToTruffleStringNode castStrKey,
-                            @Cached CastToTruffleStringNode castStrValue,
-                            @Cached PRaiseNode raiseNode,
                             @Cached HashingStorageIteratorKey itKey,
                             @Cached HashingStorageGetItem getItem) {
                 Object keyObj = itKey.execute(inliningTarget, storage, it);
                 if (PGuards.isString(keyObj)) {
                     TruffleString key = castStrKey.execute(inliningTarget, keyObj);
-                    TruffleString valueReprString = getReprString(inliningTarget, getItem.execute(inliningTarget, state.dictStorage, key), valueReprNode, castStrValue, raiseNode);
+                    TruffleString valueReprString = getReprString(frame, inliningTarget, getItem.execute(inliningTarget, state.dictStorage, key), valueReprNode);
                     appendItem(state, key, valueReprString);
                 }
                 return state;
@@ -295,7 +282,7 @@ public final class SimpleNamespaceBuiltins extends PythonBuiltins {
                         @Cached TruffleStringBuilder.ToStringNode toStringNode) {
             final Object klass = getClassNode.execute(inliningTarget, ns);
             final TruffleString name = clsProfile.profileClass(inliningTarget, klass, PythonBuiltinClassType.PSimpleNamespace) ? T_NAMESPACE : getNameNode.execute(inliningTarget, klass);
-            TruffleStringBuilder sb = TruffleStringBuilder.create(TS_ENCODING);
+            TruffleStringBuilderUTF32 sb = TruffleStringBuilder.createUTF32();
             appendStringNode.execute(sb, name);
             appendStringNode.execute(sb, T_LPAREN);
             PythonContext ctxt = PythonContext.get(forEachNode);

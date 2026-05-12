@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -58,7 +58,6 @@ import com.oracle.truffle.api.dsl.GenerateCached;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.nodes.EncapsulatingNodeReference;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 import com.oracle.truffle.api.strings.TruffleString;
@@ -144,6 +143,16 @@ public abstract class PRaiseNode extends Node {
     @InliningCutoff
     public static PException raiseAttributeErrorStatic(Node inliningTarget, TruffleString errorMessage, Object obj, Object key) {
         throw raiseWithDataStatic(inliningTarget, PythonBuiltinClassType.AttributeError, AttributeErrorBuiltins.dataForObjKey(obj, key), errorMessage, obj, key);
+    }
+
+    public final PException raiseNameError(Node inliningTarget, Object name) {
+        executeEnterProfile(inliningTarget);
+        throw raiseNameErrorStatic(inliningTarget, name);
+    }
+
+    @InliningCutoff
+    public static PException raiseNameErrorStatic(Node inliningTarget, Object name) {
+        throw raiseWithDataStatic(inliningTarget, PythonBuiltinClassType.NameError, new Object[]{name}, ErrorMessages.NAME_NOT_DEFINED, name);
     }
 
     public final PException raiseWithData(Node inliningTarget, PythonBuiltinClassType type, Object[] data, TruffleString format, Object... formatArgs) {
@@ -265,11 +274,7 @@ public abstract class PRaiseNode extends Node {
 
     // No @InliningCutoff, done in callers already
     public static PException raiseExceptionObjectStatic(Node raisingNode, Object exc, boolean withJavaStacktrace) {
-        if (raisingNode != null && raisingNode.isAdoptable()) {
-            throw PException.fromObject(exc, raisingNode, withJavaStacktrace);
-        } else {
-            throw PException.fromObject(exc, EncapsulatingNodeReference.getCurrent().get(), withJavaStacktrace);
-        }
+        throw PException.fromObjectFixUncachedLocation(exc, raisingNode, withJavaStacktrace);
     }
 
     public static PRaiseNode getUncached() {

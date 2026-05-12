@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,6 +40,9 @@
  */
 package com.oracle.graal.python.builtins.objects.tuple;
 
+import static com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.readPtrField;
+import static com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.readStructArrayPtrField;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.NULLPTR;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.J___REDUCE__;
 import static com.oracle.graal.python.nodes.StringLiterals.T_COMMA_SPACE;
 import static com.oracle.graal.python.nodes.StringLiterals.T_EQ;
@@ -47,7 +50,6 @@ import static com.oracle.graal.python.nodes.StringLiterals.T_LPAREN;
 import static com.oracle.graal.python.nodes.StringLiterals.T_RPAREN;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.NotImplementedError;
 import static com.oracle.graal.python.util.PythonUtils.EMPTY_TRUFFLESTRING_ARRAY;
-import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -62,7 +64,6 @@ import com.oracle.graal.python.builtins.PythonBuiltins;
 import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
 import com.oracle.graal.python.builtins.objects.cext.capi.CExtNodes;
 import com.oracle.graal.python.builtins.objects.cext.structs.CFields;
-import com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess;
 import com.oracle.graal.python.builtins.objects.common.SequenceStorageNodes;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.object.ObjectNodes;
@@ -73,7 +74,6 @@ import com.oracle.graal.python.lib.PyNumberAsSizeNode;
 import com.oracle.graal.python.lib.PyObjectReprAsTruffleStringNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.HiddenAttr;
-import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.attributes.ReadAttributeFromObjectNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
@@ -94,10 +94,10 @@ import com.oracle.truffle.api.dsl.GenerateNodeFactory;
 import com.oracle.truffle.api.dsl.NodeFactory;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
-import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.api.strings.TruffleStringBuilder;
+import com.oracle.truffle.api.strings.TruffleStringBuilderUTF32;
 
 @CoreFunctions(extendClasses = {
                 PythonBuiltinClassType.PStatResult,
@@ -116,7 +116,8 @@ import com.oracle.truffle.api.strings.TruffleStringBuilder;
                 PythonBuiltinClassType.PIntInfo,
                 PythonBuiltinClassType.PHashInfo,
                 PythonBuiltinClassType.PThreadInfo,
-                PythonBuiltinClassType.PUnraisableHookArgs})
+                PythonBuiltinClassType.PUnraisableHookArgs,
+                PythonBuiltinClassType.PExceptHookArgs})
 public final class StructSequenceBuiltins extends PythonBuiltins {
 
     public static final TpSlots SLOTS = StructSequenceBuiltinsSlotsGen.SLOTS;
@@ -166,14 +167,12 @@ public final class StructSequenceBuiltins extends PythonBuiltins {
         @Specialization
         @TruffleBoundary
         static TruffleString[] doNative(PythonAbstractNativeObject type) {
-            CStructAccess.ReadPointerNode read = CStructAccess.ReadPointerNode.getUncached();
-            Object membersPtr = read.readFromObj(type, CFields.PyTypeObject__tp_members);
+            long membersPtr = readPtrField(type.getPtr(), CFields.PyTypeObject__tp_members);
             List<TruffleString> members = new ArrayList<>();
-            InteropLibrary lib = InteropLibrary.getUncached();
-            if (!PGuards.isNullOrZero(membersPtr, lib)) {
+            if (membersPtr != NULLPTR) {
                 for (int i = 0;; i++) {
-                    Object memberNamePtr = read.readStructArrayElement(membersPtr, i, CFields.PyMemberDef__name);
-                    if (PGuards.isNullOrZero(memberNamePtr, lib)) {
+                    long memberNamePtr = readStructArrayPtrField(membersPtr, i, CFields.PyMemberDef__name);
+                    if (memberNamePtr == NULLPTR) {
                         break;
                     }
                     TruffleString name = CExtNodes.FromCharPointerNode.executeUncached(memberNamePtr);
@@ -199,7 +198,7 @@ public final class StructSequenceBuiltins extends PythonBuiltins {
                         @Cached TruffleStringBuilder.AppendStringNode appendStringNode,
                         @Cached TruffleStringBuilder.ToStringNode toStringNode) {
             Object type = getClassNode.execute(inliningTarget, self);
-            TruffleStringBuilder sb = TruffleStringBuilder.create(TS_ENCODING);
+            TruffleStringBuilderUTF32 sb = TruffleStringBuilder.createUTF32();
             appendStringNode.execute(sb, getQName.execute(frame, type));
             appendStringNode.execute(sb, T_LPAREN);
             SequenceStorage tupleStore = self.getSequenceStorage();

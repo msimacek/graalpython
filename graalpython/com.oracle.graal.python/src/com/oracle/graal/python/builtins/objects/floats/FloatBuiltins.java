@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2014, Regents of the University of California
  *
  * All rights reserved.
@@ -296,7 +296,7 @@ public final class FloatBuiltins extends PythonBuiltins {
             static Object floatFromObjectManagedSubclass(VirtualFrame frame, Object cls, Object obj, @SuppressWarnings("unused") boolean needsNativeAllocation,
                             @Bind Node inliningTarget,
                             @Shared @Cached TypeNodes.GetInstanceShape getInstanceShape,
-                            @Shared @Cached PrimitiveFloatNode recursiveCallNode) {
+                            @Exclusive @Cached PrimitiveFloatNode recursiveCallNode) {
                 Shape shape = getInstanceShape.execute(cls);
                 return PFactory.createFloat(cls, shape, recursiveCallNode.execute(frame, inliningTarget, obj));
             }
@@ -309,10 +309,10 @@ public final class FloatBuiltins extends PythonBuiltins {
             @InliningCutoff
             static Object floatFromObjectNativeSubclass(VirtualFrame frame, Object cls, Object obj, @SuppressWarnings("unused") boolean needsNativeAllocation,
                             @Bind Node inliningTarget,
-                            @Cached @SuppressWarnings("unused") IsSubtypeNode isSubtype,
-                            @Cached CExtNodes.FloatSubtypeNew subtypeNew,
-                            @Shared @Cached PrimitiveFloatNode recursiveCallNode) {
-                return subtypeNew.call(cls, recursiveCallNode.execute(frame, inliningTarget, obj));
+                            @Exclusive @Cached @SuppressWarnings("unused") IsSubtypeNode isSubtype,
+                            @Exclusive @Cached CExtNodes.FloatSubtypeNew subtypeNew,
+                            @Exclusive @Cached PrimitiveFloatNode recursiveCallNode) {
+                return subtypeNew.execute(inliningTarget, cls, recursiveCallNode.execute(frame, inliningTarget, obj));
             }
 
             protected static boolean isSubtypeOfFloat(IsSubtypeNode isSubtypeNode, Object cls) {
@@ -504,7 +504,15 @@ public final class FloatBuiltins extends PythonBuiltins {
             if (doSpecialCases(inliningTarget, left, right, raiseNode) == 1) {
                 return 1.0;
             }
-            return Math.pow(left, right);
+            return doPow(inliningTarget, left, right, raiseNode);
+        }
+
+        private static double doPow(Node inliningTarget, double left, double right, PRaiseNode raiseNode) {
+            double result = Math.pow(left, right);
+            if (Double.isInfinite(result) && Double.isFinite(left) && Double.isFinite(right)) {
+                throw raiseNode.raise(inliningTarget, OverflowError, ErrorMessages.NUMERICAL_RESULT_OUT_OF_RANGE);
+            }
+            return result;
         }
 
         @Specialization(rewriteOn = UnexpectedResultException.class)
@@ -522,7 +530,7 @@ public final class FloatBuiltins extends PythonBuiltins {
                 PythonLanguage language = PythonLanguage.get(inliningTarget);
                 throw new UnexpectedResultException(powerNode.execute(frame, PFactory.createComplex(language, left, 0), PFactory.createComplex(language, right, 0), none));
             }
-            return Math.pow(left, right);
+            return doPow(inliningTarget, left, right, raiseNode);
         }
 
         @Specialization(replaces = "doDD")
@@ -539,7 +547,7 @@ public final class FloatBuiltins extends PythonBuiltins {
                 PythonLanguage language = PythonLanguage.get(inliningTarget);
                 return powerNode.execute(frame, PFactory.createComplex(language, left, 0), PFactory.createComplex(language, right, 0), none);
             }
-            return Math.pow(left, right);
+            return doPow(inliningTarget, left, right, raiseNode);
         }
 
         @Specialization

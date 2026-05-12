@@ -1,4 +1,4 @@
-# Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -62,6 +62,13 @@ class BasicTests(unittest.TestCase):
         assert not (2**52 - 1 + 0.5).is_integer()
         # for doubles this big, all representable values are integers...
         assert (2**52 + 0.5).is_integer()
+
+    def test_pow_overflow(self):
+        self.assertRaises(OverflowError, pow, 10.0, 400)
+        self.assertRaises(OverflowError, pow, 10.0, 400.0)
+        self.assertRaises(OverflowError, pow, -1e308, 3.0)
+        self.assertEqual(pow(INF, 2.0), INF)
+        self.assertEqual(pow(2.0, INF), INF)
 
     def test_rounding(self):
         assert round(1.123, 0) == 1
@@ -147,6 +154,23 @@ class BasicTests(unittest.TestCase):
         assert round(C(), 1) == 1
         a = object()
         assert round(C(), a) == a
+
+    def test_round_missing_special_method(self):
+        class MissingRound:
+            def __getattr__(self, name):
+                if name == "__round__":
+                    return lambda *args: 42
+                raise AttributeError(name)
+
+        with self.assertRaisesRegex(TypeError, "__round__"):
+            round(MissingRound())
+
+    def test_round_returns_notimplemented(self):
+        class NotImplementedRound:
+            def __round__(self, *args):
+                return NotImplemented
+
+        assert round(NotImplementedRound()) is NotImplemented
 
     def test_create(self):
         class Obj:

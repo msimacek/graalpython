@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -92,6 +92,7 @@ import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 import com.oracle.truffle.api.profiles.InlinedIntValueProfile;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.api.strings.TruffleStringBuilder;
+import com.oracle.truffle.api.strings.TruffleStringBuilderUTF32;
 
 @GenerateUncached
 @GenerateInline
@@ -120,6 +121,12 @@ public abstract class CreateArgumentsNode extends PNodeWithContext {
      */
     public abstract Object[] execute(Node inliningTarget, Object callableOrName, Object[] userArguments, PKeyword[] keywords, Signature signature, Object self, Object classObject,
                     Object[] defaults, PKeyword[] kwdefaults, boolean methodcall);
+
+    @TruffleBoundary
+    public static Object[] executeUncached(Object callableOrName, Object[] userArguments, PKeyword[] keywords, Signature signature, Object self, Object classObject,
+                    Object[] defaults, PKeyword[] kwdefaults, boolean methodcall) {
+        return CreateArgumentsNodeGen.getUncached().execute(null, callableOrName, userArguments, keywords, signature, self, classObject, defaults, kwdefaults, methodcall);
+    }
 
     @Specialization
     static Object[] doIt(Node inliningTarget, Object callableOrName, Object[] userArguments, PKeyword[] keywords, Signature signature, Object self, Object classObject, Object[] defaults,
@@ -630,7 +637,7 @@ public abstract class CreateArgumentsNode extends PNodeWithContext {
 
         @TruffleBoundary
         private static TruffleString joinArgNames(TruffleString[] missingNames, int missingCnt) {
-            TruffleStringBuilder sb = TruffleStringBuilder.create(TS_ENCODING);
+            TruffleStringBuilderUTF32 sb = TruffleStringBuilder.createUTF32();
             sb.appendStringUncached(missingNames[0]);
             if (missingCnt == 2) {
                 sb.appendStringUncached(toTruffleStringUncached("' and '"));

@@ -1,8 +1,11 @@
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates.
 # Copyright (C) 1996-2020 Python Software Foundation
 #
 # Licensed under the PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
-    
+import os
+import subprocess
+import sys
+import tempfile
 import unittest
 
 class MyIndexable(object):
@@ -38,6 +41,24 @@ class BuiltinTest(unittest.TestCase):
         self.assertRaises(TypeError, divmod, 10, c2)
         self.assertRaises(TypeError, divmod, c1, 10)
 
+    def test_aiter_type_errors(self):
+        class BadAIter:
+            def __aiter__(self):
+                return object()
+
+        async def async_for_none():
+            async for _ in None:
+                pass
+
+        with self.assertRaisesRegex(TypeError, "'NoneType' object is not an async iterable"):
+            aiter(None)
+        with self.assertRaisesRegex(TypeError, "'int' object is not an async iterable"):
+            aiter(1)
+        with self.assertRaisesRegex(TypeError, r"aiter\(\) returned not an async iterator of type 'object'"):
+            aiter(BadAIter())
+        with self.assertRaisesRegex(TypeError, "'async for' requires an object with __aiter__ method, got NoneType"):
+            async_for_none().send(None)
+
     def test_getitem_typeerror(self):
         a = object()
         try:
@@ -50,6 +71,18 @@ class BuiltinTest(unittest.TestCase):
     def test_ascii(self):
         self.assertEqual(ascii(1), "1")
         self.assertEqual(ascii("錦蛇 \t \0 a \x03"), "'\\u9326\\u86c7 \\t \\x00 a \\x03'")
+
+    def test_ascii_preserves_str_subclass_for_ascii_repr(self):
+        class MyStr(str):
+            pass
+
+        class Foo:
+            def __repr__(self):
+                return MyStr("hello")
+
+        result = ascii(Foo())
+        self.assertEqual(result, "hello")
+        self.assertIs(type(result), MyStr)
 
     def test_input(self):
         import sys
@@ -68,7 +101,7 @@ class BuiltinTest(unittest.TestCase):
         self.assertEqual(chr(97), 'a')
         self.assertEqual(chr(0xfff), '\u0fff')
         self.assertEqual(chr(0xf0000), '\U000f0000')
-        
+
     def test_ord(self):
         self.assertEqual(ord(' '), 32)
         self.assertEqual(ord('a'), 97)
@@ -93,19 +126,26 @@ class BuiltinTest(unittest.TestCase):
 
     def test_sort_keyfunc(self):
         lists = [[], [1], [1,2], [1,2,3], [1,3,2], [3,2,1], [9,3,8,1,7,9,3,6,7,8]]
-        
+
         for l in lists:
             count = 0
-            
+
             def keyfunc(v):
                 nonlocal count
                 count += 1
                 return v
-            
+
             result = sorted(l, key = keyfunc)
             self.assertEqual(len(l), count)
             self.assertEqual(sorted(l), result)
             count = 0
             result = sorted(l, key = keyfunc, reverse = True)
             self.assertEqual(len(l), count)
-            self.assertEqual(sorted(l, reverse = True), result)       
+            self.assertEqual(sorted(l, reverse = True), result)
+
+    def test_license(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Test that it can find the license even when ran outside of the distribution
+            license = subprocess.check_output([sys.executable, "-c", "print(license())"], cwd=tmpdir, text=True, input=("\n" * 100))
+            if sys.implementation.name == 'graalpy':
+                self.assertIn('Oracle', license)

@@ -1,4 +1,4 @@
-# Copyright (c) 2025, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -39,6 +39,7 @@
 
 import argparse
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -46,6 +47,7 @@ from pathlib import Path
 
 DIR = Path(__file__).parent.parent
 DOWNSTREAM_TESTS = {}
+CI = os.environ.get('CI', '').lower() in ('1', 'true')
 
 
 def run(*args, check=True, **kwargs):
@@ -54,6 +56,10 @@ def run(*args, check=True, **kwargs):
 
 def run_in_venv(venv, cmd, **kwargs):
     return run(['sh', '-c', f". {venv}/bin/activate && {shlex.join(cmd)}"], **kwargs)
+
+
+def replace_in_file(path: Path, pattern, replacement, flags=0):
+    path.write_text(re.sub(pattern, replacement, path.read_text(), flags=flags))
 
 
 def downstream_test(name):
@@ -67,7 +73,7 @@ def downstream_test(name):
 @downstream_test('hpy')
 def downstream_test_hpy(graalpy, testdir=None, args=None, env=None, check=True, timeout=None):
     if not testdir:
-        testdir = Path('upstream-tests').absolute()
+        testdir = Path('downstream-tests').absolute()
         shutil.rmtree(testdir, ignore_errors=True)
         testdir.mkdir(exist_ok=True)
     hpy_root = DIR / "graalpython" / "hpy"
@@ -103,7 +109,7 @@ def downstream_test_hpy(graalpy, testdir=None, args=None, env=None, check=True, 
 
 @downstream_test('pybind11')
 def downstream_test_pybind11(graalpy, testdir):
-    run(['git', 'clone', 'https://github.com/pybind/pybind11.git'], cwd=testdir)
+    run(['git', 'clone', 'https://github.com/pybind/pybind11.git', '--depth', '1'], cwd=testdir)
     src = testdir / 'pybind11'
     venv = src / 'venv'
     run([graalpy, '-m', 'venv', str(venv)])
@@ -114,12 +120,12 @@ def downstream_test_pybind11(graalpy, testdir):
     run_in_venv(venv, ['cmake', '--build', 'build', *parallel_arg], cwd=src)
     env = os.environ.copy()
     env['PYTHONPATH'] = 'build/tests'
-    run_in_venv(venv, ['pytest', '-v', '--tb=short', 'tests'], cwd=src, env=env)
+    run_in_venv(venv, ['pytest', '-v', '--tb=short', '-o', 'xfail_strict=False', 'tests'], cwd=src, env=env)
 
 
 @downstream_test('virtualenv')
 def downstream_test_virtualenv(graalpy, testdir):
-    run(['git', 'clone', 'https://github.com/pypa/virtualenv.git', '-b', 'main'], cwd=testdir)
+    run(['git', 'clone', 'https://github.com/pypa/virtualenv.git', '-b', 'main', '--depth', '1'], cwd=testdir)
     src = testdir / 'virtualenv'
     venv = src / 'venv'
     run([graalpy, '-m', 'venv', str(venv)])
@@ -128,7 +134,15 @@ def downstream_test_virtualenv(graalpy, testdir):
     env['CI_RUN'] = '1'
     # Need to avoid pulling in graalpy seeder
     env['PIP_GRAALPY_DISABLE_PATCHING'] = '1'
-    run_in_venv(venv, ['pip', 'install', f'{src}[test]'], env=env)
+    # Update to pip that supports --group
+    run_in_venv(venv, ['pip', 'install', 'pip>=26'], env=env)
+    run_in_venv(venv, ['pip', 'install', '--group=test', '.'], env=env, cwd=src)
+    # Allow newer CPython for building zipapp, we don't have 3.11 in the CI anymore
+    replace_in_file(
+        src / 'tests/integration/test_zipapp.py',
+        r'version in range\(11, 6, -1\)',
+        'version in range(14, 6, -1)',
+    )
     # Don't activate the venv, it interferes with the test
     run([
         str(venv / 'bin' / 'pytest'), '-v', '--tb=short', 'tests',
@@ -138,38 +152,132 @@ def downstream_test_virtualenv(graalpy, testdir):
 
 @downstream_test('pyo3')
 def downstream_test_pyo3(graalpy, testdir):
-    run(['git', 'clone', 'https://github.com/PyO3/pyo3.git', '-b', 'main'], cwd=testdir)
+    run(['git', 'clone', 'https://github.com/PyO3/pyo3.git', '-b', 'main', '--depth', '1'], cwd=testdir)
     src = testdir / 'pyo3'
     venv = src / 'venv'
     run([graalpy, '-m', 'venv', str(venv)])
-    run_in_venv(venv, ['pip', 'install', 'nox'])
-    run_in_venv(venv, ['nox', '-s', 'test-py'], cwd=src)
+    run_in_venv(venv, ['python', '-m', 'pip', 'install', '--upgrade', 'pip', 'nox[uv]'])
+    env = os.environ.copy()
+    env['NOX_DEFAULT_VENV_BACKEND'] = 'uv'
+    run_in_venv(venv, ['nox', '-s', 'test-py'], cwd=src, env=env)
 
 
 @downstream_test('pydantic-core')
 def downstream_test_pydantic_core(graalpy, testdir):
-    run(['git', 'clone', 'https://github.com/pydantic/pydantic-core.git', '-b', 'main'], cwd=testdir)
-    src = testdir / 'pydantic-core'
-    run(['uv', 'sync', '--python', graalpy, '--group', 'testing'], cwd=src)
-    run(['uv', 'pip', 'install', '-e', '.'], cwd=src)
-    run(['uv', 'run', 'pytest', '-v', '--tb=short'], cwd=src)
+    run(['git', 'clone', 'https://github.com/pydantic/pydantic.git', '-b', 'main', '--depth', '1'], cwd=testdir)
+    repo = testdir / 'pydantic'
+    env = os.environ.copy()
+    env['UV_PYTHON_DOWNLOADS'] = 'never'
+    env['UV_PYTHON'] = str(graalpy)
+    # Needed for rpds-py dependency
+    env['UNSAFE_PYO3_SKIP_VERSION_CHECK'] = '1'
+    # Commands taken from upstream. The upstream has some TODOs so we'll likely need to sync this again soon
+    run(
+        ['uv', 'sync', '--directory', 'pydantic-core', '--group', 'testing-extra', '--no-install-package', 'pydantic-core'],
+        cwd=repo,
+        env=env,
+    )
+    run(
+        [
+            'uv', 'sync', '--group', 'testing-extra', '--no-install-package', 'pydantic-core',
+            '--no-install-package', 'pytest-memray', '--no-install-package', 'memray',
+            '--no-install-package', 'pytest-codspeed', '--no-install-package', 'cffi', '--inexact',
+            # GraalPy change: greenlet crashes on import
+            '--no-install-package', 'greenlet',
+        ],
+        cwd=repo,
+        env=env,
+    )
+    del env['UV_PYTHON']
+    run(
+        ['uv', 'pip', 'install', './pydantic-core', '--no-deps', '--force-reinstall'],
+        cwd=repo,
+        env=env,
+    )
+    run(
+        ['uv', 'run', '--no-sync', 'pytest', 'tests/pydantic_core', '--ignore=tests/pydantic_core/test_docstrings.py'],
+        cwd=repo,
+        env=env,
+    )
 
 
 @downstream_test('jiter')
 def downstream_test_jiter(graalpy, testdir):
-    run(['git', 'clone', 'https://github.com/pydantic/jiter.git', '-b', 'main'], cwd=testdir)
+    run(['git', 'clone', 'https://github.com/pydantic/jiter.git', '-b', 'main', '--depth', '1'], cwd=testdir)
     src = testdir / 'jiter'
+    env = os.environ.copy()
+    env['UV_PYTHON_DOWNLOADS'] = 'never'
+    run(['uv', 'sync', '--python', graalpy, '--group', 'dev', '--all-packages'], cwd=src, env=env)
+    run(['uv', 'run', '--python', graalpy, 'pytest', '-v', '--tb=short', 'crates/jiter-python/tests'], cwd=src, env=env)
+    run(['uv', 'run', '--python', graalpy, 'crates/jiter-python/bench.py', 'jiter', 'jiter-cache', '--fast'], cwd=src, env=env)
+
+
+@downstream_test('cython')
+def downstream_test_cython(graalpy, testdir):
+    run(['git', 'clone', 'https://github.com/cython/cython.git', '-b', 'master', '--depth', '1'], cwd=testdir)
+    src = testdir / 'cython'
     venv = src / 'venv'
+    env = os.environ.copy()
+    env["PYTHON_VERSION"] = "graalpy"
+    env["BACKEND"] = "c"
     run([graalpy, '-m', 'venv', str(venv)])
-    run_in_venv(venv, ['pip', 'install', '-r', 'crates/jiter-python/tests/requirements.txt'], cwd=src)
-    run_in_venv(venv, ['pip', 'install', '-e', 'crates/jiter-python',
-                       '--config-settings=build-args=--profile dev'], cwd=src)
-    run_in_venv(venv, ['pytest', '-v', '--tb=short', 'crates/jiter-python/tests'], cwd=src)
-    run_in_venv(venv, ['python', 'crates/jiter-python/bench.py', 'jiter', 'jiter-cache', '--fast'], cwd=src)
+    if not CI:
+        replace_in_file(src / 'Tools/ci-run.sh', r'^\s*sudo', '# sudo', flags=re.MULTILINE)
+        try:
+            run([graalpy, '--version', '--experimental-options', '--engine.Compilation=false'])
+        except subprocess.CalledProcessError:
+            replace_in_file(src / 'Tools/ci-run.sh', r'--engine\.Compilation=false', '')
+    run_in_venv(venv, ["bash", "./Tools/ci-run.sh"], cwd=src, env=env)
+
+
+# To run locally, use:
+# docker run --rm -it -p 1521:1521 -p 5500:5500 -e ORACLE_PWD=asdf12345678 container-registry.oracle.com/database/free@sha256:51940ce2a4c9a085c9deb715713d68c579756e9bf09a0d7318c7e3e28f70ba1e
+@downstream_test('oracledb')
+def downstream_test_oracledb(graalpy, testdir):
+    run([
+        'git', 'clone', 'https://github.com/oracle/python-oracledb.git',
+        '-b', 'main',
+        '--depth', '1',
+        '--recurse-submodules',
+    ], cwd=testdir)
+    src = testdir / 'python-oracledb'
+    venv = src / 'venv'
+    env = os.environ.copy()
+    env.setdefault('PYO_TEST_CONNECT_STRING', "127.0.0.1:1521/FREEPDB1")
+    env.setdefault('PYO_TEST_ADMIN_USER', "SYSTEM")
+    env.setdefault('PYO_TEST_ADMIN_PASSWORD', "asdf12345678")
+    env.setdefault('PYO_TEST_MAIN_USER', "pythontest")
+    env.setdefault('PYO_TEST_MAIN_PASSWORD', "testpasswordAx3")
+    env.setdefault('PYO_TEST_PROXY_USER', "pythontestproxy")
+    env.setdefault('PYO_TEST_PROXY_PASSWORD', "testpasswordAx3")
+    run([graalpy, '-m', 'venv', str(venv)])
+    run_in_venv(venv, ['pip', 'install', '.[test]'], cwd=src)
+    run_in_venv(venv, ['pip', 'install', 'pytest-rerunfailures'], cwd=src)
+    run_in_venv(venv, ['pytest', '--tb=short', 'tests/create_schema.py'], cwd=src, env=env)
+    try:
+        for mode_arg in ([], ['--use-thick-mode']):
+            run_in_venv(venv, [
+                'pytest',
+                '--tb=short',
+                '-v',
+                '-rs',
+                '--reruns',
+                '1',
+                '--reruns-delay',
+                '3',
+                '--only-rerun',
+                'Listener refused connection',
+                'tests',
+                '--ignore',
+                'tests/ext',
+                *mode_arg,
+            ], cwd=src, env=env)
+    finally:
+        run_in_venv(venv, ['pytest', '--tb=short', 'tests/drop_schema.py'], cwd=src, env=env)
 
 
 def run_downstream_test(python, project):
-    testdir = Path('upstream-tests').absolute()
+    testdir = Path('downstream-tests').absolute()
     shutil.rmtree(testdir, ignore_errors=True)
     testdir.mkdir(exist_ok=True)
     python = os.path.abspath(python)
@@ -177,7 +285,7 @@ def run_downstream_test(python, project):
 
 
 def main():
-    parser = argparse.ArgumentParser("Runs important upstream packages tests using their main branch")
+    parser = argparse.ArgumentParser("Runs important downstream packages tests using their main branch")
     parser.add_argument("python")
     parser.add_argument("project", choices=sorted(DOWNSTREAM_TESTS))
     args = parser.parse_args()

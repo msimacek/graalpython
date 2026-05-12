@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -62,6 +62,14 @@ public final class SourceRange {
 
     public SourceRange withEnd(int newEndLine, int newEndColumn) {
         return new SourceRange(startLine, startColumn, newEndLine, newEndColumn);
+    }
+
+    public SourceRange startLineShiftColumn(int shift) {
+        assert shift >= 0;
+        if (shift == 0 || this == ARTIFICIAL_RANGE) {
+            return this;
+        }
+        return new SourceRange(startLine, startColumn, startLine, startColumn + shift);
     }
 
     public SourceRange shiftStartRight(int columns) {

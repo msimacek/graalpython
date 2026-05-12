@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,13 +40,36 @@
  */
 package com.oracle.graal.python.builtins.modules.datetime;
 
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.OverflowError;
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
+import static com.oracle.graal.python.builtins.objects.cext.structs.CStructAccess.readIntField;
+
+import java.lang.ref.Reference;
+import java.math.BigInteger;
+
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.cext.PythonAbstractNativeObject;
+import com.oracle.graal.python.builtins.objects.cext.capi.CApiContext;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionInvoker;
+import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionNodes.PyObjectCheckFunctionResultNode;
+import com.oracle.graal.python.builtins.objects.cext.capi.NativeCAPISymbol;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTiming;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions;
+import com.oracle.graal.python.builtins.objects.cext.capi.transitions.CApiTransitions.NativeToPythonTransferNode;
+import com.oracle.graal.python.builtins.objects.cext.structs.CFields;
 import com.oracle.graal.python.builtins.objects.type.TypeNodes;
-import com.oracle.graal.python.lib.PyLongAsLongNode;
+import com.oracle.graal.python.lib.PyFloatAsDoubleNode;
+import com.oracle.graal.python.lib.PyFloatCheckNode;
+import com.oracle.graal.python.lib.PyLongAsDoubleNode;
+import com.oracle.graal.python.lib.PyLongCheckNode;
 import com.oracle.graal.python.lib.PyLongFromDoubleNode;
+import com.oracle.graal.python.lib.PyNumberMultiplyNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
+import com.oracle.graal.python.nodes.util.CastToJavaBigIntegerNode;
+import com.oracle.graal.python.runtime.IndirectCallData.BoundaryCallData;
+import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateCached;
@@ -57,8 +80,6 @@ import com.oracle.truffle.api.nodes.EncapsulatingNodeReference;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.object.Shape;
 
-import static com.oracle.graal.python.builtins.PythonBuiltinClassType.TypeError;
-
 public class TimeDeltaNodes {
     @GenerateUncached
     @GenerateInline
@@ -68,48 +89,20 @@ public class TimeDeltaNodes {
         private static final int MAX_DAYS = 999_999_999;
         private static final int MIN_DAYS = -999_999_999;
 
-        public abstract PTimeDelta execute(Node inliningTarget, Object cls, Object days, Object seconds, Object microseconds, Object milliseconds, Object minutes, Object hours, Object weeks);
+        public abstract Object execute(Node inliningTarget, Object cls, Object days, Object seconds, Object microseconds, Object milliseconds, Object minutes, Object hours, Object weeks);
+
+        public final PTimeDelta executeBuiltin(Node inliningTarget, Object days, Object seconds, Object microseconds, Object milliseconds, Object minutes, Object hours, Object weeks) {
+            return (PTimeDelta) execute(inliningTarget, PythonBuiltinClassType.PTimeDelta, days, seconds, microseconds, milliseconds, minutes, hours, weeks);
+        }
 
         public static TimeDeltaNodes.NewNode getUncached() {
             return TimeDeltaNodesFactory.NewNodeGen.getUncached();
         }
 
         @Specialization
-        static PTimeDelta newTimeDelta(Node inliningTarget, Object cls, Object days, Object seconds, Object microseconds, Object milliseconds, Object minutes, Object hours, Object weeks,
-                        @Cached PRaiseNode raiseNode,
+        static Object newTimeDelta(Node inliningTarget, Object cls, Object days, Object seconds, Object microseconds, Object milliseconds, Object minutes, Object hours, Object weeks,
                         @Cached TypeNodes.GetInstanceShape getInstanceShape) {
-            if (days == PNone.NO_VALUE) {
-                days = 0;
-            }
-            if (seconds == PNone.NO_VALUE) {
-                seconds = 0;
-            }
-            if (microseconds == PNone.NO_VALUE) {
-                microseconds = 0;
-            }
-            if (milliseconds == PNone.NO_VALUE) {
-                milliseconds = 0;
-            }
-            if (minutes == PNone.NO_VALUE) {
-                minutes = 0;
-            }
-            if (hours == PNone.NO_VALUE) {
-                hours = 0;
-            }
-            if (weeks == PNone.NO_VALUE) {
-                weeks = 0;
-            }
-
-            validateNumericParameter(days, "days", inliningTarget, raiseNode);
-            validateNumericParameter(seconds, "seconds", inliningTarget, raiseNode);
-            validateNumericParameter(microseconds, "microseconds", inliningTarget, raiseNode);
-            validateNumericParameter(milliseconds, "milliseconds", inliningTarget, raiseNode);
-            validateNumericParameter(minutes, "minutes", inliningTarget, raiseNode);
-            validateNumericParameter(hours, "hours", inliningTarget, raiseNode);
-            validateNumericParameter(weeks, "weeks", inliningTarget, raiseNode);
-
             Shape shape = getInstanceShape.execute(cls);
-
             EncapsulatingNodeReference encapsulating = EncapsulatingNodeReference.getCurrent();
             Node encapsulatingNode = encapsulating.set(inliningTarget);
             try {
@@ -122,29 +115,45 @@ public class TimeDeltaNodes {
             }
         }
 
-        private static void validateNumericParameter(Object value, String name, Node inliningTarget, PRaiseNode raiseNode) {
-            if (!(value instanceof Integer) && !(value instanceof Long) && !(value instanceof Double)) {
-                throw raiseNode.raise(inliningTarget, TypeError, ErrorMessages.UNSUPPORTED_TYPE_FOR_TIMEDELTA_S_COMPONENT_P, name, value);
-            }
-        }
+        public static final long US_PER_MS = 1000;
+        public static final long US_PER_SECOND = 1000_000;
+        public static final long US_PER_MINUTE = US_PER_SECOND * 60;
+        public static final long US_PER_HOUR = US_PER_MINUTE * 60;
+        public static final long US_PER_DAY = US_PER_HOUR * 24;
+        public static final long US_PER_WEEK = US_PER_DAY * 7;
+
+        public static final BigInteger BIG_US_PER_SECOND = BigInteger.valueOf(US_PER_SECOND);
+        public static final BigInteger BIG_SECONDS_PER_DAY = BigInteger.valueOf(3600 * 24);
 
         @TruffleBoundary
-        private static PTimeDelta createTimeDelta(Node inliningTarget, Object cls, Shape shape, Object days, Object seconds, Object microseconds, Object milliseconds, Object minutes, Object hours,
+        private static Object createTimeDelta(Node inliningTarget, Object cls, Shape shape, Object days, Object seconds, Object microseconds, Object milliseconds, Object minutes, Object hours,
                         Object weeks) {
             Accumulator accumulator = new Accumulator();
-            accumulator.addDays(days);
-            accumulator.addSeconds(seconds);
-            accumulator.addMicroSeconds(microseconds);
-            accumulator.addMilliSeconds(milliseconds);
-            accumulator.addMinutes(minutes);
-            accumulator.addHours(hours);
-            accumulator.addWeeks(weeks);
-
+            accumulator.add("microseconds", microseconds, 1);
+            accumulator.add("milliseconds", milliseconds, US_PER_MS);
+            accumulator.add("seconds", seconds, US_PER_SECOND);
+            accumulator.add("minutes", minutes, US_PER_MINUTE);
+            accumulator.add("hours", hours, US_PER_HOUR);
+            accumulator.add("days", days, US_PER_DAY);
+            accumulator.add("weeks", weeks, US_PER_WEEK);
             accumulator.roundMicroseconds();
+            return createTimeDeltaFromMicroseconds(inliningTarget, cls, shape, accumulator.getTotalMicroseconds());
+        }
 
-            long daysNormalized = accumulator.getDays();
-            long secondsNormalized = accumulator.getSeconds();
-            long microsecondsNormalized = accumulator.getMicroseconds();
+        private static final CApiTiming C_API_TIMING = CApiTiming.create(true, NativeCAPISymbol.FUN_TIMEDELTA_SUBTYPE_NEW);
+
+        @TruffleBoundary
+        private static Object createTimeDeltaFromMicroseconds(Node inliningTarget, Object cls, Shape shape, BigInteger microseconds) {
+            BigInteger[] res = microseconds.divideAndRemainder(BIG_US_PER_SECOND);
+            int microsecondsNormalized = res[1].intValue();
+            res = res[0].divideAndRemainder(BIG_SECONDS_PER_DAY);
+            int daysNormalized;
+            try {
+                daysNormalized = res[0].intValueExact();
+            } catch (ArithmeticException e) {
+                throw PRaiseNode.raiseStatic(inliningTarget, OverflowError, ErrorMessages.PYTHON_INT_TOO_LARGE_TO_CONV_TO, "Java int");
+            }
+            int secondsNormalized = res[1].intValue();
 
             // handle negative values - only days may be negative
             if (microsecondsNormalized < 0) {
@@ -164,201 +173,93 @@ public class TimeDeltaNodes {
                                 MAX_DAYS);
             }
 
-            return new PTimeDelta(cls, shape,
-                            (int) daysNormalized,
-                            (int) secondsNormalized,
-                            (int) microsecondsNormalized);
+            if (!TypeNodes.NeedsNativeAllocationNode.executeUncached(cls)) {
+                return new PTimeDelta(cls, shape,
+                                daysNormalized,
+                                secondsNormalized,
+                                microsecondsNormalized);
+            } else {
+                long clsPointer = CApiTransitions.PythonToNativeNode.executeLongUncached(cls);
+                try {
+                    PythonContext context = PythonContext.get(null);
+                    var callable = CApiContext.getNativeSymbol(null, NativeCAPISymbol.FUN_TIMEDELTA_SUBTYPE_NEW);
+                    long nativeResult = ExternalFunctionInvoker.invokeTIMEDELTA_SUBTYPE_NEW(null, C_API_TIMING,
+                                    context.ensureNativeContext(), BoundaryCallData.getUncached(), context.getThreadState(context.getLanguage(inliningTarget)), callable,
+                                    clsPointer, daysNormalized, secondsNormalized, microsecondsNormalized);
+                    return PyObjectCheckFunctionResultNode.executeUncached(NativeCAPISymbol.FUN_TIMEDELTA_SUBTYPE_NEW.getTsName(), NativeToPythonTransferNode.executeRawUncached(nativeResult));
+                } finally {
+                    Reference.reachabilityFence(cls);
+                }
+            }
         }
 
         private static class Accumulator {
-            private long days = 0;
-            private long seconds = 0;
-            private double microseconds = 0;
+            private BigInteger microseconds = BigInteger.ZERO;
+            private double leftover;
 
-            long getDays() {
-                return days;
-            }
-
-            long getSeconds() {
-                return seconds;
-            }
-
-            long getMicroseconds() {
-                return (long) microseconds;
-            }
-
-            @TruffleBoundary
-            void addDays(Object value) {
-                if (value instanceof Long l) {
-                    days += l;
-                } else if (value instanceof Integer i) {
-                    days += i;
-                } else if (value instanceof Double d) {
-                    double valueAsDouble = d;
-
-                    // handle Infinity and NaN
-                    Object valueAsLongObject = PyLongFromDoubleNode.executeUncached(d);
-                    long valueAsLong = PyLongAsLongNode.executeUncached(valueAsLongObject);
-
-                    days += valueAsLong;
-                    seconds += (long) ((valueAsDouble - valueAsLong) * 24 * 3600);
-                    microseconds += ((valueAsDouble - valueAsLong) * 24 * 3600 * 1_000_000) % 1_000_000;
+            public void add(String field, Object num, long factor) {
+                if (num instanceof PNone) {
+                    return;
                 }
-
-                normalize();
-            }
-
-            void addSeconds(Object value) {
-                if (value instanceof Long l) {
-                    days += l / (24 * 3600);
-                    seconds += l % (24 * 3600);
-                } else if (value instanceof Integer i) {
-                    days += i / (24 * 3600L);
-                    seconds += i % (24 * 3600L);
-                } else if (value instanceof Double d) {
-                    double valueAsDouble = d;
-
-                    // handle Infinity and NaN
-                    Object valueAsLongObject = PyLongFromDoubleNode.executeUncached(d);
-                    long valueAsLong = PyLongAsLongNode.executeUncached(valueAsLongObject);
-
-                    days += valueAsLong / (24 * 3600);
-                    seconds += valueAsLong % (24 * 3600);
-                    microseconds += ((valueAsDouble - valueAsLong) * 1_000_000) % 1_000_000;
-                }
-
-                normalize();
-            }
-
-            void addMicroSeconds(Object value) {
-                if (value instanceof Long l) {
-                    days += l / (24 * 3600 * 1_000_000L);
-                    seconds += l % (24 * 3600 * 1_000_000L) / 1_000_000;
-                    microseconds += l % 1_000_000;
-                } else if (value instanceof Integer i) {
-                    // Java int cannot represent microseconds that exceed microseconds in a day
-                    seconds += i / 1_000_000L;
-                    microseconds += i % 1_000_000L;
-                } else if (value instanceof Double d) {
-                    double valueAsDouble = d;
-
-                    // handle Infinity and NaN
-                    Object valueAsLongObject = PyLongFromDoubleNode.executeUncached(d);
-                    long valueAsLong = PyLongAsLongNode.executeUncached(valueAsLongObject);
-
-                    days += valueAsLong / (24 * 3600 * 1_000_000L);
-                    seconds += valueAsLong % (24 * 3600 * 1_000_000L) / 1_000_000;
-                    microseconds += valueAsDouble % 1_000_000;
-                }
-
-                normalize();
-            }
-
-            void addMilliSeconds(Object value) {
-                if (value instanceof Long l) {
-                    days += l / (24 * 3600 * 1_000);
-                    seconds += l % (24 * 3600 * 1_000) / 1_000;
-                    microseconds += (l % 1_000) * 1_000;
-                } else if (value instanceof Integer i) {
-                    days += i / (24 * 3600 * 1_000L);
-                    seconds += i % (24 * 3600 * 1_000L) / 1_000;
-                    microseconds += (i % 1_000L) * 1_000;
-                } else if (value instanceof Double d) {
-                    double valueAsDouble = d;
-
-                    // handle Infinity and NaN
-                    Object valueAsLongObject = PyLongFromDoubleNode.executeUncached(d);
-                    long valueAsLong = PyLongAsLongNode.executeUncached(valueAsLongObject);
-
-                    days += valueAsLong / (24 * 3600 * 1_000);
-                    seconds += valueAsLong % (24 * 3600 * 1_000) / 1_000;
-                    microseconds += (valueAsDouble * 1_000) % 1_000;
-                }
-
-                normalize();
-            }
-
-            void addMinutes(Object value) {
-                if (value instanceof Long l) {
-                    days += l / (24 * 60);
-                    seconds += l % (24 * 60) * 60;
-                } else if (value instanceof Integer i) {
-                    days += i / (24 * 60L);
-                    seconds += i % (24 * 60L) * 60;
-                } else if (value instanceof Double d) {
-                    double valueAsDouble = d;
-
-                    // handle Infinity and NaN
-                    Object valueAsLongObject = PyLongFromDoubleNode.executeUncached(d);
-                    long valueAsLong = PyLongAsLongNode.executeUncached(valueAsLongObject);
-
-                    days += valueAsLong / (24 * 60);
-                    seconds += (long) (valueAsDouble % (24 * 60) * 60);
-                    microseconds += ((valueAsDouble - valueAsLong) * 60 * 1_000_000) % 1_000_000;
-                }
-
-                normalize();
-            }
-
-            void addHours(Object value) {
-                if (value instanceof Long l) {
-                    days += l / 24;
-                    seconds += (l % 24) * 3600;
-                } else if (value instanceof Integer i) {
-                    days += i / 24L;
-                    seconds += (i % 24L) * 3600;
-                } else if (value instanceof Double d) {
-                    double valueAsDouble = d;
-
-                    // handle Infinity and NaN
-                    Object valueAsLongObject = PyLongFromDoubleNode.executeUncached(d);
-                    long valueAsLong = PyLongAsLongNode.executeUncached(valueAsLongObject);
-
-                    days += valueAsLong / 24;
-                    seconds += (long) ((valueAsDouble % 24) * 3600);
-                    microseconds += ((valueAsDouble - valueAsLong) * 3600 * 1_000_000) % 1_000_000;
-                }
-
-                normalize();
-            }
-
-            void addWeeks(Object value) {
-                if (value instanceof Long l) {
-                    days += l * 7;
-                } else if (value instanceof Integer i) {
-                    days += i * 7L;
-                } else if (value instanceof Double d) {
-                    double valueAsDouble = d;
-
-                    // handle Infinity and NaN
-                    Object valueAsLongObject = PyLongFromDoubleNode.executeUncached(d);
-                    long valueAsLong = PyLongAsLongNode.executeUncached(valueAsLongObject);
-
-                    days += (long) (valueAsDouble * 7);
-                    seconds += (long) (((valueAsDouble - valueAsLong) * 7 * 24 * 3600) % (24 * 3600));
-                    microseconds += ((valueAsDouble - valueAsLong) * 7 * 24 * 3600 * 1_000_000) % 1_000_000;
-                }
-
-                normalize();
-            }
-
-            @TruffleBoundary
-            void roundMicroseconds() {
-                microseconds = Math.rint(microseconds);
-                normalize();
-            }
-
-            private void normalize() {
-                if (microseconds >= 1_000_000) {
-                    seconds += (long) microseconds / 1_000_000;
-                    microseconds = microseconds % 1_000_000;
-                }
-
-                if (seconds >= 24 * 3600) {
-                    days += seconds / (24 * 3600);
-                    seconds = seconds % (24 * 3600);
+                if (PyLongCheckNode.executeUncached(num)) {
+                    Object prod = PyNumberMultiplyNode.getUncached().execute(null, num, factor);
+                    microseconds = microseconds.add(CastToJavaBigIntegerNode.executeUncached(prod));
+                } else if (PyFloatCheckNode.executeUncached(num)) {
+                    double dnum = PyFloatAsDoubleNode.executeUncached(num);
+                    double intpart = dnum >= 0 ? Math.floor(dnum) : Math.ceil(dnum);
+                    double fracpart = dnum - intpart;
+                    Object x = PyLongFromDoubleNode.executeUncached(intpart);
+                    Object prod = PyNumberMultiplyNode.getUncached().execute(null, x, factor);
+                    microseconds = microseconds.add(CastToJavaBigIntegerNode.executeUncached(prod));
+                    if (fracpart != 0) {
+                        dnum = PyLongAsDoubleNode.executeUncached(factor);
+                        dnum *= fracpart;
+                        intpart = dnum >= 0 ? Math.floor(dnum) : Math.ceil(dnum);
+                        fracpart = dnum - intpart;
+                        x = PyLongFromDoubleNode.executeUncached(intpart);
+                        microseconds = microseconds.add(CastToJavaBigIntegerNode.executeUncached(x));
+                        leftover += fracpart;
+                    }
+                } else {
+                    throw PRaiseNode.raiseStatic(null, TypeError, ErrorMessages.UNSUPPORTED_TYPE_FOR_TIMEDELTA_S_COMPONENT_P, field, num);
                 }
             }
+
+            public void roundMicroseconds() {
+                if (leftover != 0) {
+                    /* Round to nearest whole # of us, and add into microseconds. */
+                    double wholeUs = Math.round(leftover);
+                    if (Math.abs(wholeUs - leftover) == 0.5) {
+                        /*
+                         * We're exactly halfway between two integers. In order to do
+                         * round-half-to-even, we must determine whether microseconds is odd. Note
+                         * that microseconds is odd when it's last bit is 1. The code below uses
+                         * bitwise and operation to check the last bit.
+                         */
+                        int xIsOdd = microseconds.testBit(0) ? 1 : 0;
+                        wholeUs = 2.0 * Math.round((leftover + xIsOdd) * 0.5) - xIsOdd;
+                    }
+                    microseconds = microseconds.add(BigInteger.valueOf((long) wholeUs));
+                }
+            }
+
+            public BigInteger getTotalMicroseconds() {
+                return microseconds;
+            }
+        }
+    }
+
+    public static final class FromNative {
+        static int getDays(PythonAbstractNativeObject self) {
+            return readIntField(self.getPtr(), CFields.PyDateTime_Delta__days);
+        }
+
+        static int getSeconds(PythonAbstractNativeObject self) {
+            return readIntField(self.getPtr(), CFields.PyDateTime_Delta__seconds);
+        }
+
+        static int getMicroseconds(PythonAbstractNativeObject self) {
+            return readIntField(self.getPtr(), CFields.PyDateTime_Delta__microseconds);
         }
     }
 }

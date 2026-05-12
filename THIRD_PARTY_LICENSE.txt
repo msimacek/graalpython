@@ -39,9 +39,9 @@ SOFTWARE.
 
 ================================================================================
 
-Bouncy Castle Crypto API 1.68
+Bouncy Castle Crypto API 1.84
 
-Copyright (c) 2000-2021 The Legion of the Bouncy Castle Inc.
+Copyright (c) 2000-2023 The Legion of the Bouncy Castle Inc.
 (https://www.bouncycastle.org)
 Permission is hereby granted, free of charge, to any person obtaining a copy of
 this software
@@ -343,7 +343,7 @@ The command line interpreter is covered by the Apache Software
 License. See the org/apache/LICENSE file for details.
 ================================================================================
 
-xz 5.2.6
+xz 5.8.3
 
 https://git.tukaani.org/?p=xz.git;a=blob;f=COPYING
 1

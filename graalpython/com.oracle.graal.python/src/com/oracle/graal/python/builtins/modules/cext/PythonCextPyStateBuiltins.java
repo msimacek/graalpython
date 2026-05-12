@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -50,6 +50,8 @@ import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.Arg
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.PyThreadState;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Py_ssize_t;
 import static com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescriptor.Void;
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.NULLPTR;
+import static com.oracle.graal.python.runtime.PythonContext.NATIVE_NULL;
 
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiBinaryBuiltinNode;
 import com.oracle.graal.python.builtins.modules.cext.PythonCextBuiltins.CApiBuiltin;
@@ -62,6 +64,7 @@ import com.oracle.graal.python.builtins.objects.cext.capi.transitions.ArgDescrip
 import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.frame.PFrame;
 import com.oracle.graal.python.builtins.objects.ints.PInt;
+import com.oracle.graal.python.builtins.objects.object.PythonObject;
 import com.oracle.graal.python.builtins.objects.thread.PThread;
 import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
@@ -71,7 +74,6 @@ import com.oracle.graal.python.nodes.util.CannotCastException;
 import com.oracle.graal.python.runtime.GilNode;
 import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.graal.python.runtime.PythonContext.PythonThreadState;
-import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.graal.python.util.OverflowException;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.ThreadLocalAction;
@@ -79,67 +81,72 @@ import com.oracle.truffle.api.TruffleLogger;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.interop.InteropLibrary;
-import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
 
 public final class PythonCextPyStateBuiltins {
 
-    @CApiBuiltin(ret = Int, args = {}, acquireGil = false, call = Ignored)
-    abstract static class GraalPyPrivate_GILState_Check extends CApiNullaryBuiltinNode {
+    private static final TruffleLogger LOGGER = CApiContext.getLogger(PythonCextPyStateBuiltins.class);
 
-        @Specialization
-        Object check() {
-            return PythonContext.get(this).ownsGil() ? 1 : 0;
-        }
+    @CApiBuiltin(ret = Int, args = {}, acquireGil = false, call = Ignored)
+    static int GraalPyPrivate_GILState_Check() {
+        return PythonContext.get(null).ownsGil() ? 1 : 0;
     }
 
     @CApiBuiltin(ret = Int, args = {}, acquireGil = false, call = Ignored)
-    abstract static class GraalPyPrivate_GILState_Ensure extends CApiNullaryBuiltinNode {
-
-        @Specialization
-        static Object save(@Cached GilNode gil) {
-            boolean acquired = gil.acquire();
-            return acquired ? 1 : 0;
-        }
+    static int GraalPyPrivate_GILState_Ensure() {
+        boolean acquired = GilNode.getUncached().acquire();
+        return acquired ? 1 : 0;
     }
 
     @CApiBuiltin(ret = Void, args = {}, acquireGil = false, call = Ignored)
-    abstract static class GraalPyPrivate_GILState_Release extends CApiNullaryBuiltinNode {
-
-        @Specialization
-        static Object restore(
-                        @Cached GilNode gil) {
-            gil.release(true);
-            return PNone.NO_VALUE;
-        }
+    static void GraalPyPrivate_GILState_Release() {
+        GilNode.getUncached().release(true);
     }
 
-    @CApiBuiltin(ret = PyThreadState, args = {Pointer}, call = Ignored)
-    abstract static class GraalPyPrivate_ThreadState_Get extends CApiUnaryBuiltinNode {
+    /**
+     * Very unlikely fallback for threads that were already attached when another thread initialized
+     * the C API, but were blocked at that time and therefore could not process the thread-local
+     * action that eagerly initializes their native 'tstate_current' TLS slot.
+     */
+    @CApiBuiltin(ret = PyThreadState, args = {Pointer}, acquireGil = false, call = Ignored)
+    static long GraalPyPrivate_ThreadState_Get(long tstateCurrentPtr) {
 
-        @Specialization(limit = "1")
-        static Object get(Object tstateCurrentPtr,
-                        @Bind Node inliningTarget,
-                        @Bind PythonContext context,
-                        @CachedLibrary("tstateCurrentPtr") InteropLibrary lib) {
-            PythonThreadState pythonThreadState = context.getThreadState(context.getLanguage(inliningTarget));
-            if (!lib.isNull(tstateCurrentPtr)) {
-                pythonThreadState.setNativeThreadLocalVarPointer(tstateCurrentPtr);
-            }
-            return PThreadState.getOrCreateNativeThreadState(pythonThreadState);
+        PythonContext context = PythonContext.get(null);
+        PythonThreadState threadState = context.getThreadState(context.getLanguage());
+
+        /*
+         * The C caller may have observed 'tstate_current == NULL' before entering this upcall.
+         * While entering this builtin, the same thread may process a queued thread-local action
+         * from C API initialization and initialize its native thread state eagerly. So the
+         * fallback decision made in C can be stale by the time we get here.
+         */
+        if (threadState.isNativeThreadStateInitialized()) {
+            LOGGER.fine(() -> String.format("Lazy initialization attempt of native thread state for thread %s aborted. Was initialized in the meantime.", Thread.currentThread()));
+            long nativeThreadState = threadState.getNativePointer();
+            assert nativeThreadState != NULLPTR;
+            return nativeThreadState;
         }
+
+        LOGGER.fine(() -> "Lazy (fallback) initialization of native thread state for thread " + Thread.currentThread());
+        assert threadState.getNativePointer() == PythonObject.UNINITIALIZED;
+        long nativeThreadState = PThreadState.getOrCreateNativeThreadState(threadState);
+        threadState.setNativeThreadLocalVarPointer(tstateCurrentPtr);
+        return nativeThreadState;
     }
 
     @CApiBuiltin(ret = Void, args = {}, call = Ignored)
-    abstract static class GraalPyPrivate_BeforeThreadDetach extends CApiNullaryBuiltinNode {
-        @Specialization
-        @TruffleBoundary
-        Object doIt() {
-            getContext().disposeThread(Thread.currentThread(), true);
-            return PNone.NO_VALUE;
-        }
+    static Object GraalPyPrivate_BeforeThreadDetach() {
+        /*
+         * This is the PyGILState_Release path for native-created threads. CPython clears its own
+         * auto-TSS key and deletes the PyThreadState here. Our Java thread state is stored in a
+         * Truffle ContextThreadLocal, which has no per-thread clear operation for a still-alive
+         * thread. If the same native thread later enters the context again, Truffle may return the
+         * same PythonThreadState object. Therefore this is a detach, not final thread shutdown: free
+         * the native PyThreadState, but leave the Java state usable for the next attach.
+         */
+        PythonContext.get(null).disposeThread(Thread.currentThread(), true, false);
+        return PNone.NO_VALUE;
     }
 
     @CApiBuiltin(ret = PyObjectBorrowed, args = {}, call = Direct)
@@ -151,12 +158,7 @@ public final class PythonCextPyStateBuiltins {
                         @Bind Node inliningTarget,
                         @Bind PythonContext context) {
             PythonThreadState threadState = context.getThreadState(context.getLanguage(inliningTarget));
-            PDict threadStateDict = threadState.getDict();
-            if (threadStateDict == null) {
-                threadStateDict = PFactory.createDict(context.getLanguage());
-                threadState.setDict(threadStateDict);
-            }
-            return threadStateDict;
+            return PThreadState.getOrCreateThreadStateDict(context, threadState);
         }
     }
 
@@ -215,10 +217,10 @@ public final class PythonCextPyStateBuiltins {
     @CApiBuiltin(ret = PyFrameObjectTransfer, args = {PyThreadState}, call = Direct)
     abstract static class PyThreadState_GetFrame extends CApiUnaryBuiltinNode {
         @Specialization
-        Object get(@SuppressWarnings("unused") Object threadState,
+        Object get(@SuppressWarnings("unused") long threadState,
                         @Cached ReadFrameNode readFrameNode) {
             PFrame pFrame = readFrameNode.getCurrentPythonFrame(null);
-            return pFrame != null ? pFrame : getNativeNull();
+            return pFrame != null ? pFrame : NATIVE_NULL;
         }
     }
 
@@ -231,11 +233,11 @@ public final class PythonCextPyStateBuiltins {
                 int i = PInt.intValueExact(mIndex);
                 Object result = getCApiContext().getModuleByIndex(i);
                 if (result == null) {
-                    return getNativeNull();
+                    return NATIVE_NULL;
                 }
                 return result;
             } catch (CannotCastException | OverflowException e) {
-                return getNativeNull();
+                return NATIVE_NULL;
             }
         }
     }

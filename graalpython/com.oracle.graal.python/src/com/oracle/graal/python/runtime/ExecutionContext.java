@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -93,9 +93,10 @@ import com.oracle.truffle.api.profiles.InlinedCountingConditionProfile;
  * <p>
  * The whole reason for this infrastructure is to:
  * <p>
- * 1) avoid passing the {@link PFrame.Reference} and exception state (the currently handled
- * exception) to the callee as arguments, because that would prevent them from being escape analyzed
- * (unless everything is inlined, we do not want to rely on that).
+ * 1) avoid passing the {@link com.oracle.graal.python.builtins.objects.frame.PFrame.Reference} and
+ * exception state (the currently handled exception) to the callee as arguments, because that would
+ * prevent them from being escape analyzed (unless everything is inlined, we do not want to rely on
+ * that).
  * <p>
  * 2) avoid materializing the {@link PFrame} instance that represents the current
  * {@link VirtualFrame}, because it is expensive operation and may prevent objects stored in the
@@ -128,9 +129,11 @@ import com.oracle.truffle.api.profiles.InlinedCountingConditionProfile;
  * pass them initially. First time we actually need them, we do Truffle stack walk
  * ({@code TruffleRuntime#iterateFrames}), during which we set the
  * {@link PRootNode#getCallerFlags()} flags for all the root nodes that we had to traverse - so next
- * time, we should not need to do the stack walk, we should just receive {@link PFrame.Reference}
- * from the caller and just traverse the linked-list of {@link PFrame.Reference}s to the
- * {@link PFrame.Reference} we need.</li>
+ * time, we should not need to do the stack walk, we should just receive
+ * {@link com.oracle.graal.python.builtins.objects.frame.PFrame.Reference} from the caller and just
+ * traverse the linked-list of
+ * {@link com.oracle.graal.python.builtins.objects.frame.PFrame.Reference}s to the
+ * {@link com.oracle.graal.python.builtins.objects.frame.PFrame.Reference} we need.</li>
  * <li>Python function calls into {@code @TruffleBoundary} annotated code: We need to store the
  * exception state and PFrame reference into the thread state. In order to avoid doing this every
  * time, flags in {@link IndirectCallData.BoundaryCallData} tells us if we should pass them, and
@@ -181,7 +184,7 @@ public abstract class ExecutionContext {
                         @Bind Node inliningTarget,
                         @Cached PassCallerFrameNode passCallerFrame,
                         @Cached PassExceptionStateNode passExceptionState) {
-            assert PArguments.isPythonFrame(frame) || inliningTarget.getRootNode() instanceof TopLevelExceptionHandler : "calling from non-Python or non-top-level frame";
+            assert inliningTarget.getRootNode() instanceof TopLevelExceptionHandler || PArguments.assertIsPythonFrame(frame) : "calling from non-Python or non-top-level frame";
             passCallerFrame.execute(frame, inliningTarget, callArguments, callerFlags);
             passExceptionState.execute(frame, inliningTarget, callArguments, CallerFlags.needsExceptionState(callerFlags));
         }
@@ -210,15 +213,6 @@ public abstract class ExecutionContext {
                     // We are handing the PFrame of the current frame to the caller, i.e., it does
                     // not 'escape' since it is still on the stack. Also, force synchronization of
                     // values if requested
-                    if (PythonOptions.ENABLE_BYTECODE_DSL_INTERPRETER) {
-                        // For the manual interpreter it is OK to executeOnStack with uncached
-                        // `materialize` Node, but once we have uncached Bytecode DSL interpreter,
-                        // it
-                        // will have to use EncapsulatingNodeReference or some other way (e.g., in
-                        // frame) to pass down the BytecodeNode. This can be also sign of missing
-                        // BoundaryCallContext.enter/exit around TruffleBoundary
-                        assert materialize.isAdoptable();
-                    }
                     if (thisInfo.getPyFrame() != null && !CallerFlags.needsLocals(callerFlags) && !CallerFlags.needsLasti(callerFlags)) {
                         thisInfo.getPyFrame().setLastCallerFlags(callerFlags);
                     } else {

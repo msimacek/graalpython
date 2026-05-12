@@ -1,6 +1,6 @@
 # Contributing to GraalPy
 
-Thanks for considering to contribute! 
+Thanks for considering to contribute!
 To get you started, read about the structure of this implementation.
 
 You will need to sign the [Oracle Contributor Agreement](http://www.graalvm.org/community/contributors/) for us to be able to merge your work.
@@ -8,6 +8,14 @@ You will need to sign the [Oracle Contributor Agreement](http://www.graalvm.org/
 Please also take some time to review our [code of conduct](http://www.graalvm.org/community/conduct/) for contributors.
 
 ## Getting Started
+
+### Using a Github codespace
+
+The devcontainer we create sets up a code workspace on launch—the first time you launch the container, you will need a bit of patience.
+Then, use the command palette or the File menu and select "Open Workspace from File" and select [/workspace/graalpython.code-workspace](../../../graalpython.code-workspace).
+The VSCode window will reload and open GraalPy and all the related Java projects.
+
+### Setting up on your machine
 
 The first thing you want to do is to set up [`mx`](https://github.com/graalvm/mx.git).
 This is the build tool we use to develop GraalVM languages.
@@ -59,7 +67,7 @@ If you use another editor (such as VSCode, Emacs, or Neovim) with support for th
 
 Besides the source code of the Python interpreter, we have some useful `mx` functions defined under the _mx.graalpython_ directory.
 As you make changes, you can always test them with `mx python-jvm && mx python`.
-Additionally, there are various "gates" that we use on our CI systems to check any code that is committed. 
+Additionally, there are various "gates" that we use on our CI systems to check any code that is committed.
 You can run all the gates with the command `mx python-gate` or just some by using `mx python-gate --tags [TAG]`.
 Interesting gates to run that cover a good chunk of the code things are:
 
@@ -90,7 +98,7 @@ In general, most of these methods should have equivalents in our libs nodes in t
 If something is missing that is commonly used, we probably have some Node for it somewhere, but it may be a good idea to create a lib node and migrate usages.
 
 GraalPy has its own variant of the Argument Clinic preprocessor.
-It is activated by: 
+It is activated by:
 * extending `PythonXXXClinicBuiltinNode` (e.g. `PythonBinaryClinicBuiltinNode`),
 * using `@ArgumentClinic` annotations on the built-in node class,
 * and overriding the `getArgumentClinic` method to return the class that will be generated from the annotations (it will be named the same as the node class plus `ClinicProviderGen` suffix).
@@ -221,6 +229,26 @@ find graalpython -name '*.co' -delete
 mx punittest com.oracle.graal.python.test.compiler
 ```
 
+### CI Unittests
+
+Most of our internal unittests are also ran on Github workflows.
+The `Run CI unittests` (`.github/workflows/ci-unittests.yml`) workflow will execute automatically when you open your PR, synchronize it and mark it as ready.
+**Note**: Unittests don't run on draft PRs.
+
+By default, all gates defined in the `Run CI unittests` `jobs_to_run:` regex will run.
+You can run specific tests by manually triggering the `Generate CI Matrix from ci.jsonnet` (`.github/workflows/ci-matrix-gen.yml`) workflow and filling in the `Jobs to run` field.This field MUST be a valid python regex or be left empty to run all gates.
+
+If you need to update any tags, please use the `Run Weekly unittest retagger` (`.github/workflows/ci-unittests-retagger.yml`) workflow. This sets up the required GitHub-specific environment and ensures that internal tests are not disrupted. Here again, you may use a Python regex to retag only specific platforms.
+
+The retagger workflow will automatically open a ready-to-merge PR in your fork.
+
+You can manually check which jobs will be run with your regex by using the `.github/scripts/extract_matrix.py` script.
+You will need to have the [sjsonnet](https://github.com/databricks/sjsonnet) binary available.
+
+```bash
+python3 .github/scripts/extract_matrix.py ../sjsonnet ci.jsonnet tier{1-3} {regex} > matrix.json
+```
+
 ## Benchmarking
 
 We use the `mx` facilities for benchmarking.
@@ -259,14 +287,16 @@ mx benchmark meso:nbody3 \
     -Dgraal.MethodFilter=*measure*
 ```
 
+For debugging native problems in benchmark runs, there's `BENCHMARK_DEBUG_ARGS` in `mx_graalpython_benchmark.py` to log more stuff for debugging, at the cost of performance.
+This is intended for focused reproducer runs on a branch.
+
 ### A note on terminology
 
 Note that there may be a little confusion about the configuration names of benchmarks.
 
-#### GraalVM Community Edition and Oracle GraalVM configurations
+#### Oracle GraalVM configurations
 
-We have benchmarks for GraalVM Community Edition and Oracle GraalVM.
-For historical reasons, these are sometimes referred to in some config files as *CE* and *EE*; *core* and *enterprise*; *graalvm_ce* and *graalvm_ee*; or *graalpython_core* and *graalpython_enterprise*, respectively.
+Benchmark CI jobs use Oracle GraalVM configurations. For historical reasons, these are sometimes referred to in config files as *EE*, *enterprise*, *graalvm_ee*, or *graalpython_enterprise*.
 
 ### Different GraalVM Python configurations
 
@@ -296,7 +326,7 @@ mx --env ../../graal/vm/mx.vm/ce \
     --dynamicimports /vm build
 ```
 
-The first command will print some information about the GraalVM configuration that is about to be built, and the second will build it. 
+The first command will print some information about the GraalVM configuration that is about to be built, and the second will build it.
 >**IMPORTANT:** The first command should tell you that the `Config name` is `ce_python`, otherwise the next commands will not work.
 
 To run the JVM configuration:

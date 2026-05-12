@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -45,7 +45,6 @@ import static com.oracle.graal.python.nodes.ErrorMessages.ARG_MUST_BE_NUMBER;
 import static com.oracle.graal.python.nodes.ErrorMessages.INTEROP_TYPE_ALREADY_REGISTERED;
 import static com.oracle.graal.python.nodes.ErrorMessages.INTEROP_TYPE_NOT_MERGABLE;
 import static com.oracle.graal.python.nodes.ErrorMessages.S_ARG_MUST_BE_S_NOT_P;
-import static com.oracle.graal.python.nodes.ErrorMessages.S_CANNOT_HAVE_S;
 import static com.oracle.graal.python.nodes.ErrorMessages.S_DOES_NOT_TAKE_VARARGS;
 import static com.oracle.graal.python.nodes.ErrorMessages.S_TAKES_EXACTLY_D_ARGS;
 import static com.oracle.graal.python.nodes.ErrorMessages.S_TAKES_NO_KEYWORD_ARGS;
@@ -68,6 +67,7 @@ import static com.oracle.graal.python.runtime.exception.PythonErrorType.ValueErr
 import static com.oracle.graal.python.util.PythonUtils.EMPTY_BYTE_ARRAY;
 import static com.oracle.graal.python.util.PythonUtils.EMPTY_OBJECT_ARRAY;
 import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
+import static com.oracle.graal.python.util.PythonUtils.callCallTarget;
 import static com.oracle.graal.python.util.PythonUtils.tsLiteral;
 
 import java.io.IOException;
@@ -82,6 +82,7 @@ import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.Python3Core;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
+import com.oracle.graal.python.builtins.modules.PolyglotModuleBuiltinsClinicProviders.EnterForeignCriticalRegionNodeClinicProviderGen;
 import com.oracle.graal.python.builtins.modules.PolyglotModuleBuiltinsClinicProviders.RegisterInteropTypeNodeClinicProviderGen;
 import com.oracle.graal.python.builtins.objects.PNone;
 import com.oracle.graal.python.builtins.objects.PythonAbstractObject;
@@ -108,6 +109,7 @@ import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonTernaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
+import com.oracle.graal.python.nodes.function.builtins.PythonUnaryClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
 import com.oracle.graal.python.nodes.interop.InteropBehavior;
 import com.oracle.graal.python.nodes.interop.InteropBehaviorMethod;
@@ -207,6 +209,21 @@ public final class PolyglotModuleBuiltins extends PythonBuiltins {
         }
     }
 
+    @Builtin(name = "__set_gil_locked_during_foreign_calls__", parameterNames = {"lock"})
+    @GenerateNodeFactory
+    @ArgumentClinic(name = "lock", conversion = ClinicConversion.Boolean)
+    public abstract static class EnterForeignCriticalRegionNode extends PythonUnaryClinicBuiltinNode {
+        @Override
+        protected ArgumentClinicProvider getArgumentClinic() {
+            return EnterForeignCriticalRegionNodeClinicProviderGen.INSTANCE;
+        }
+
+        @Specialization
+        static boolean enter(boolean lock, @Bind Node inliningTarget) {
+            return PythonContext.get(inliningTarget).setGilLockedDuringForeignCalls(lock);
+        }
+    }
+
     @Builtin(name = "import_value", minNumOfPositionalArgs = 1, parameterNames = {"name"})
     @GenerateNodeFactory
     public abstract static class ImportNode extends PythonBuiltinNode {
@@ -270,7 +287,7 @@ public final class PolyglotModuleBuiltins extends PythonBuiltins {
                 if (mimeType != null) {
                     builder = builder.mimeType(mimeType);
                 }
-                Object result = env.parsePublic(builder.build()).call();
+                Object result = callCallTarget(env.parsePublic(builder.build()), this);
                 return PForeignToPTypeNode.getUncached().executeConvert(result);
             } catch (AbstractTruffleException e) {
                 throw e;
@@ -688,10 +705,6 @@ public final class PolyglotModuleBuiltins extends PythonBuiltins {
                 // validate the function
                 if (function.getKwDefaults().length != 0) {
                     throw raiseNode.raise(this, ValueError, S_TAKES_NO_KEYWORD_ARGS, method.name);
-                } else if (function.getCode().getCellVars().length != 0) {
-                    throw raiseNode.raise(this, ValueError, S_CANNOT_HAVE_S, method.name, "cell vars");
-                } else if (function.getCode().getFreeVars().length != 0) {
-                    throw raiseNode.raise(this, ValueError, S_CANNOT_HAVE_S, method.name, "free vars");
                 } else {
                     // check signature
                     if (method.takesVarArgs != signature.takesVarArgs()) {
@@ -839,7 +852,7 @@ public final class PolyglotModuleBuiltins extends PythonBuiltins {
                         @Cached ObjectHashMap.PutNode putNode,
                         @Cached ObjectHashMap.GetNode getNode,
                         @Cached PRaiseNode raiseNode) {
-            foreignClass = checkAndCleanForeignClass(inliningTarget, foreignClass, interopLibrary, raiseNode, getContext().getEnv());
+            foreignClass = checkAndCleanForeignClass(inliningTarget, foreignClass, interopLibrary, raiseNode);
 
             if (!isClassTypeNode.execute(inliningTarget, pythonClass)) {
                 throw raiseNode.raise(inliningTarget, ValueError, S_ARG_MUST_BE_S_NOT_P, "second", "a python class", pythonClass);
@@ -903,11 +916,11 @@ public final class PolyglotModuleBuiltins extends PythonBuiltins {
             }
         }
 
-        private static Object checkAndCleanForeignClass(Node inliningTarget, Object object, InteropLibrary interopLibrary, PRaiseNode raiseNode, Env env) {
+        private static Object checkAndCleanForeignClass(Node inliningTarget, Object object, InteropLibrary interopLibrary, PRaiseNode raiseNode) {
             if (!interopLibrary.isMetaObject(object)) {
                 throw raiseNode.raise(inliningTarget, ValueError, S_ARG_MUST_BE_S_NOT_P, "first", "a class or interface", object);
             }
-            if (!env.isHostObject(object)) {
+            if (!interopLibrary.isHostObject(object)) {
                 return object;
             }
             final String memberClass = "class";
@@ -1135,7 +1148,7 @@ public final class PolyglotModuleBuiltins extends PythonBuiltins {
     @GenerateNodeFactory
     public abstract static class KeysNode extends InteropBuiltinBaseNode {
         @Specialization
-        Object remove(Object receiver,
+        Object keys(Object receiver,
                         @Bind Node inliningTarget,
                         @Cached PRaiseNode raiseNode) {
             try {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,16 +42,20 @@ package com.oracle.graal.python.nodes.exception;
 
 import static com.oracle.graal.python.builtins.modules.io.IONodes.T_WRITE;
 import static com.oracle.graal.python.nodes.BuiltinNames.T_SYS;
+import static com.oracle.graal.python.nodes.BuiltinNames.T___BUILTINS__;
 import static com.oracle.graal.python.runtime.exception.PythonErrorType.SystemExit;
+import static com.oracle.graal.python.util.PythonUtils.TS_ENCODING;
 import static com.oracle.graal.python.util.PythonUtils.toTruffleStringUncached;
 
 import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.Python3Core;
 import com.oracle.graal.python.builtins.objects.PNone;
+import com.oracle.graal.python.builtins.objects.code.PCode;
 import com.oracle.graal.python.builtins.objects.dict.PDict;
 import com.oracle.graal.python.builtins.objects.exception.ExceptionNodes;
 import com.oracle.graal.python.builtins.objects.exception.PBaseException;
 import com.oracle.graal.python.builtins.objects.function.PArguments;
+import com.oracle.graal.python.builtins.objects.function.PKeyword;
 import com.oracle.graal.python.builtins.objects.module.PythonModule;
 import com.oracle.graal.python.lib.PyObjectCallMethodObjArgs;
 import com.oracle.graal.python.lib.PyObjectStrAsObjectNode;
@@ -67,6 +71,7 @@ import com.oracle.graal.python.runtime.ExecutionContext.IndirectCalleeContext;
 import com.oracle.graal.python.runtime.GilNode;
 import com.oracle.graal.python.runtime.PythonContext;
 import com.oracle.graal.python.runtime.PythonOptions;
+import com.oracle.graal.python.runtime.PythonSourceOptions;
 import com.oracle.graal.python.runtime.exception.ExceptionUtils;
 import com.oracle.graal.python.runtime.exception.PException;
 import com.oracle.graal.python.runtime.exception.PythonExitException;
@@ -86,12 +91,14 @@ import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.api.source.SourceSection;
+import com.oracle.truffle.api.strings.TruffleString;
 
 public final class TopLevelExceptionHandler extends RootNode {
     private final RootCallTarget innerCallTarget;
     private final PException exception;
     private final SourceSection sourceSection;
     private final Source source;
+    private final boolean newGlobals;
 
     @Child private GilNode gilNode = GilNode.create();
 
@@ -113,6 +120,7 @@ public final class TopLevelExceptionHandler extends RootNode {
         if (child instanceof PBytecodeRootNode) {
             instrumentationForwarder = ((PBytecodeRootNode) child).createInstrumentationMaterializationForwarder();
         }
+        this.newGlobals = source.getOptions(language).get(PythonSourceOptions.NewGlobals);
     }
 
     public TopLevelExceptionHandler(PythonLanguage language, PException exception) {
@@ -121,6 +129,7 @@ public final class TopLevelExceptionHandler extends RootNode {
         this.innerCallTarget = null;
         this.exception = exception;
         this.source = null;
+        this.newGlobals = false;
     }
 
     private PythonLanguage getPythonLanguage() {
@@ -145,6 +154,10 @@ public final class TopLevelExceptionHandler extends RootNode {
                 } catch (PythonExitException e) {
                     throw e;
                 } catch (PythonThreadKillException e) {
+                    // Before raising PythonThreadKillException, we always give up GIL, and it
+                    // should just propagate all the way here. In GilNode#acquire we do not
+                    // re-acquire GIL when we catch this exception.
+                    wasAcquired = false;
                     throw new PythonInterruptedException();
                 } catch (AbstractTruffleException e) {
                     assert !PArguments.isPythonFrame(frame);
@@ -153,7 +166,14 @@ public final class TopLevelExceptionHandler extends RootNode {
                     }
                     throw handlePythonException(e);
                 } catch (ThreadDeath e) {
-                    // do not handle, result of TruffleContext.closeCancelled()
+                    // Do not handle, result of TruffleContext.closeCancelled()
+                    // In GilNode#acquire we do not re-acquire GIL in case of ThreadDeath, so we may
+                    // or may not hold the GIL, so we release it only conditionally
+                    PythonContext ctx = PythonContext.get(null);
+                    if (ctx.ownsGil()) {
+                        ctx.releaseGil();
+                    }
+                    wasAcquired = false;
                     throw e;
                 } catch (Throwable e) {
                     handleJavaException(e);
@@ -306,14 +326,21 @@ public final class TopLevelExceptionHandler extends RootNode {
         PythonContext pythonContext = getContext();
         PythonModule mainModule = null;
         PythonLanguage language = getPythonLanguage();
+        PCode code = PFactory.createCode(language, innerCallTarget, PythonUtils.internString(TruffleString.fromJavaStringUncached(source.getName(), TS_ENCODING)));
+        PArguments.setCodeObject(arguments, code);
         if (source.isInternal()) {
             // internal sources are not run in the main module
             PArguments.setGlobals(arguments, PFactory.createDict(language));
         } else {
-            mainModule = pythonContext.getMainModule();
-            PDict mainDict = GetOrCreateDictNode.executeUncached(mainModule);
-            PArguments.setGlobals(arguments, mainModule);
-            PArguments.setSpecialArgument(arguments, mainDict);
+            PDict globals;
+            if (newGlobals) {
+                globals = PFactory.createDict(language, new PKeyword[]{new PKeyword(T___BUILTINS__, pythonContext.getBuiltins())});
+            } else {
+                mainModule = pythonContext.getMainModule();
+                globals = GetOrCreateDictNode.executeUncached(mainModule);
+            }
+            PArguments.setGlobals(arguments, globals);
+            PArguments.setSpecialArgument(arguments, globals);
             PArguments.setException(arguments, PException.NO_EXCEPTION);
         }
         // At the top level we don't have a real Python frame at hand, so we go through

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2014, Regents of the University of California
  *
  * All rights reserved.
@@ -67,7 +67,6 @@ import com.oracle.graal.python.builtins.CoreFunctions;
 import com.oracle.graal.python.builtins.Python3Core;
 import com.oracle.graal.python.builtins.PythonBuiltinClassType;
 import com.oracle.graal.python.builtins.PythonBuiltins;
-import com.oracle.graal.python.builtins.modules.BuiltinFunctions.IsInstanceNode;
 import com.oracle.graal.python.builtins.modules.CodecsModuleBuiltins;
 import com.oracle.graal.python.builtins.modules.SysModuleBuiltins;
 import com.oracle.graal.python.builtins.objects.PNone;
@@ -95,8 +94,8 @@ import com.oracle.graal.python.builtins.objects.type.slots.TpSlotSizeArgFun.SqRe
 import com.oracle.graal.python.builtins.objects.type.slots.TpSlotSqContains.SqContainsBuiltinNode;
 import com.oracle.graal.python.lib.PyNumberAsSizeNode;
 import com.oracle.graal.python.lib.PyNumberIndexNode;
+import com.oracle.graal.python.lib.PyUnicodeCheckNode;
 import com.oracle.graal.python.nodes.ErrorMessages;
-import com.oracle.graal.python.nodes.PGuards;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.SpecialAttributeNames;
 import com.oracle.graal.python.nodes.SpecialMethodNames;
@@ -112,7 +111,6 @@ import com.oracle.graal.python.nodes.function.builtins.PythonUnaryBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonUnaryClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentCastNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
-import com.oracle.graal.python.nodes.util.CastToJavaIntExactNode;
 import com.oracle.graal.python.nodes.util.CastToTruffleStringNode;
 import com.oracle.graal.python.runtime.ExecutionContext.BoundaryCallContext;
 import com.oracle.graal.python.runtime.IndirectCallData.BoundaryCallData;
@@ -205,10 +203,10 @@ public final class BytesCommonBuiltins extends PythonBuiltins {
         static Object decode(VirtualFrame frame, Object self, TruffleString encoding, TruffleString errors,
                         @Bind Node inliningTarget,
                         @Cached CodecsModuleBuiltins.DecodeNode decodeNode,
-                        @Cached IsInstanceNode isInstanceNode,
+                        @Cached PyUnicodeCheckNode unicodeCheckNode,
                         @Cached PRaiseNode raiseNode) {
             Object result = decodeNode.executeWithStrings(frame, self, encoding, errors);
-            if (!isInstanceNode.executeWith(frame, result, PythonBuiltinClassType.PString)) {
+            if (!unicodeCheckNode.execute(inliningTarget, result)) {
                 throw raiseNode.raise(inliningTarget, TypeError, DECODER_RETURNED_P_INSTEAD_OF_BYTES, encoding, result);
             }
             return result;
@@ -247,7 +245,13 @@ public final class BytesCommonBuiltins extends PythonBuiltins {
 
     @Slot(value = SlotKind.sq_concat, isComplex = true)
     @GenerateNodeFactory
+    @GenerateUncached
     public abstract static class ConcatNode extends SqConcatBuiltinNode {
+
+        @TruffleBoundary
+        public static PBytesLike executeUncached(Object self, Object other) {
+            return (PBytesLike) BytesCommonBuiltinsFactory.ConcatNodeFactory.getInstance().getUncachedInstance().execute(null, self, other);
+        }
 
         @Specialization
         static PBytesLike add(PBytesLike self, PBytesLike other,
@@ -760,13 +764,13 @@ public final class BytesCommonBuiltins extends PythonBuiltins {
                         @Bind Node inliningTarget,
                         @Cached CastToTruffleStringNode toStr,
                         @Cached TruffleString.CodePointLengthNode codePointLengthNode,
-                        @Cached TruffleString.CodePointAtIndexNode codePointAtIndexNode,
+                        @Cached TruffleString.CodePointAtIndexUTF32Node codePointAtIndexNode,
                         @Exclusive @Cached PRaiseNode raiseNode) {
             TruffleString str = toStr.execute(inliningTarget, strObj);
             if (codePointLengthNode.execute(str, TS_ENCODING) != 1) {
                 throw raiseNode.raise(inliningTarget, ValueError, SEP_MUST_BE_LENGTH_1);
             }
-            int cp = codePointAtIndexNode.execute(str, 0, TS_ENCODING);
+            int cp = codePointAtIndexNode.execute(str, 0);
             if (cp > 127) {
                 throw raiseNode.raise(inliningTarget, ValueError, SEP_MUST_BE_ASCII);
             }
@@ -1804,30 +1808,22 @@ public final class BytesCommonBuiltins extends PythonBuiltins {
     // bytes.splitlines([keepends])
     // bytearray.splitlines([keepends])
     @Builtin(name = "splitlines", minNumOfPositionalArgs = 1, parameterNames = {"self", "keepends"})
+    @ArgumentClinic(name = "keepends", conversion = ArgumentClinic.ClinicConversion.Boolean, defaultValue = "false")
     @GenerateNodeFactory
-    public abstract static class SplitLinesNode extends PythonBinaryBuiltinNode {
+    public abstract static class SplitLinesNode extends PythonBinaryClinicBuiltinNode {
+
+        @Override
+        protected ArgumentClinicProvider getArgumentClinic() {
+            return BytesCommonBuiltinsClinicProviders.SplitLinesNodeClinicProviderGen.INSTANCE;
+        }
+
         @Specialization
-        static PList doSplitlines(Object self, Object keependsObj,
+        static PList doSplitlines(Object self, boolean keepends,
                         @Bind Node inliningTarget,
                         @Bind PythonLanguage language,
-                        @Cached InlinedBranchProfile isPNoneProfile,
-                        @Cached InlinedBranchProfile isBooleanProfile,
-                        @Cached InlinedConditionProfile keependsProfile,
-                        @Cached CastToJavaIntExactNode cast,
                         @Cached BytesNodes.ToBytesNode toBytesNode,
                         @Cached ListNodes.AppendNode appendNode,
                         @Cached BytesNodes.CreateBytesNode create) {
-            boolean keepends;
-            if (keependsObj instanceof Boolean b) {
-                isBooleanProfile.enter(inliningTarget);
-                keepends = b;
-            } else if (PGuards.isPNone(keependsObj)) {
-                isPNoneProfile.enter(inliningTarget);
-                keepends = false;
-            } else {
-                keepends = cast.execute(inliningTarget, keependsObj) != 0;
-            }
-            keepends = keependsProfile.profile(inliningTarget, keepends);
             byte[] bytes = toBytesNode.execute(null, self);
             PList list = PFactory.createList(language);
             int sliceStart = 0;

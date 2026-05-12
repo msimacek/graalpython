@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -45,6 +45,7 @@ import static com.oracle.graal.python.util.PythonUtils.EMPTY_OBJECT_ARRAY;
 import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.builtins.objects.frame.PFrame;
 import com.oracle.graal.python.builtins.objects.function.PArguments;
+import com.oracle.graal.python.builtins.objects.function.PFunction;
 import com.oracle.graal.python.builtins.objects.generator.PGenerator;
 import com.oracle.graal.python.builtins.objects.object.PythonObject;
 import com.oracle.graal.python.nodes.PRootNode;
@@ -56,9 +57,11 @@ import com.oracle.graal.python.runtime.PythonOptions;
 import com.oracle.graal.python.runtime.object.PFactory;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.Truffle;
+import com.oracle.truffle.api.bytecode.BytecodeFrame;
 import com.oracle.truffle.api.bytecode.BytecodeNode;
 import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
+import com.oracle.truffle.api.dsl.Cached.Exclusive;
 import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.GenerateUncached;
@@ -70,6 +73,7 @@ import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.frame.MaterializedFrame;
+import com.oracle.truffle.api.nodes.EncapsulatingNodeReference;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 import com.oracle.truffle.api.profiles.InlinedIntValueProfile;
@@ -136,9 +140,13 @@ public abstract class MaterializeFrameNode extends Node {
                 location = PArguments.getCurrentFrameInfo(frameToMaterialize).getRootNode();
             }
         } else {
-            // We will need EncapsulatingNodeReference or thread the BytecodeNode as argument for
-            // BytecodeDSL uncached execution
-            assert this.isAdoptable();
+            if (!this.isAdoptable()) {
+                // This can happen in the uncached interpreter, but there the UncachedBytecodeNode
+                // should set itself as encapsulating node before it starts executing its bytecode
+                location = EncapsulatingNodeReference.getCurrent().get();
+                assert location != null;
+                assert BytecodeNode.get(location) != null;
+            }
         }
         return execute(location, markAsEscaped, forceSync, frameToMaterialize);
     }
@@ -166,7 +174,7 @@ public abstract class MaterializeFrameNode extends Node {
     static PFrame freshPFrameCachedFD(Node location, boolean markAsEscaped, boolean forceSync, Frame frameToMaterialize,
                     @Bind PythonLanguage language,
                     @Shared("syncValuesNode") @Cached SyncFrameValuesNode syncValuesNode) {
-        PFrame escapedFrame = PFactory.createPFrame(language, PArguments.getCurrentFrameInfo(frameToMaterialize), location, false);
+        PFrame escapedFrame = PFactory.createPFrame(language, PArguments.getCurrentFrameInfo(frameToMaterialize), location, PArguments.getFunctionOrCodeObject(frameToMaterialize), false);
         return doEscapeFrame(frameToMaterialize, escapedFrame, markAsEscaped, forceSync, location, syncValuesNode);
     }
 
@@ -174,7 +182,7 @@ public abstract class MaterializeFrameNode extends Node {
     static PFrame freshPFrameCustomLocals(Node location, boolean markAsEscaped, @SuppressWarnings("unused") boolean forceSync,
                     Frame frameToMaterialize,
                     @Bind PythonLanguage language) {
-        PFrame escapedFrame = PFactory.createPFrame(language, PArguments.getCurrentFrameInfo(frameToMaterialize), location, true);
+        PFrame escapedFrame = PFactory.createPFrame(language, PArguments.getCurrentFrameInfo(frameToMaterialize), location, PArguments.getFunctionOrCodeObject(frameToMaterialize), true);
         escapedFrame.setLocalsDict(PArguments.getSpecialArgument(frameToMaterialize));
         return doEscapeFrame(frameToMaterialize, escapedFrame, markAsEscaped, false, location, null);
     }
@@ -183,7 +191,7 @@ public abstract class MaterializeFrameNode extends Node {
     static PFrame freshPFrameForGenerator(Node location, @SuppressWarnings("unused") boolean markAsEscaped, @SuppressWarnings("unused") boolean forceSync, Frame frameToMaterialize) {
         MaterializedFrame generatorFrame = PGenerator.getGeneratorFrame(frameToMaterialize);
         PFrame.Reference frameRef = PArguments.getCurrentFrameInfo(frameToMaterialize);
-        PFrame escapedFrame = materializeGeneratorFrame(location, generatorFrame, PArguments.getGlobals(frameToMaterialize), frameRef);
+        PFrame escapedFrame = materializeGeneratorFrame(location, generatorFrame, PArguments.getFunctionObject(frameToMaterialize), PArguments.getGlobals(frameToMaterialize), frameRef);
         return doEscapeFrame(frameToMaterialize, escapedFrame, markAsEscaped, false, location, null);
     }
 
@@ -202,9 +210,20 @@ public abstract class MaterializeFrameNode extends Node {
         return pyFrame;
     }
 
-    public static PFrame materializeGeneratorFrame(Node location, MaterializedFrame generatorFrame, PythonObject globals, PFrame.Reference frameRef) {
-        PFrame escapedFrame = PFactory.createPFrame(PythonLanguage.get(location), frameRef, location, false);
-        escapedFrame.setLocals(generatorFrame);
+    public static PFrame materializeGeneratorFrame(Node location, MaterializedFrame generatorFrame, PFunction generatorFunction, PythonObject globals, PFrame.Reference frameRef) {
+        return materializeGeneratorFrame(PythonLanguage.get(location), location, generatorFrame, generatorFunction, globals, frameRef);
+    }
+
+    public static PFrame materializeGeneratorFrame(PythonLanguage language, Node location, MaterializedFrame generatorFrame, PFunction generatorFunction, PythonObject globals,
+                    PFrame.Reference frameRef) {
+        PFrame escapedFrame = PFactory.createPFrame(language, frameRef, location, generatorFunction, false);
+        if (PythonOptions.ENABLE_BYTECODE_DSL_INTERPRETER) {
+            BytecodeNode bytecodeNode = BytecodeNode.get(location);
+            assert bytecodeNode != null : location;
+            escapedFrame.setBytecodeFrame(bytecodeNode.createMaterializedFrame(0, generatorFrame));
+        } else {
+            escapedFrame.setLocals(generatorFrame);
+        }
         escapedFrame.setGlobals(globals);
         frameRef.setPyFrame(escapedFrame);
         return escapedFrame;
@@ -248,7 +267,7 @@ public abstract class MaterializeFrameNode extends Node {
 
         // on a freshly created PFrame, we do always sync the arguments
         escapedFrame.setGlobals(PArguments.getGlobals(frameToMaterialize));
-        escapedFrame.setLastCallerFlags(getCallerFlags(forceSync));
+        escapedFrame.setLastCallerFlags(getCallerFlags(forceSync || syncValuesNode == null));
         if (forceSync) {
             syncValuesNode.execute(escapedFrame, frameToMaterialize, location);
         }
@@ -289,24 +308,24 @@ public abstract class MaterializeFrameNode extends Node {
                         @Bind Node inliningTarget,
                         @Cached(inline = false) ValueProfile frameDescriptorProfile,
                         @Cached InlinedIntValueProfile slotCountProfile,
-                        @Cached InlinedBranchProfile createLocalsProfile) {
-            FrameDescriptor cachedFd = frameDescriptorProfile.profile(frameToSync.getFrameDescriptor());
-            MaterializedFrame target = pyFrame.getLocals();
-            if (pyFrame.getLocals() == null) {
-                createLocalsProfile.enter(inliningTarget);
-                target = Truffle.getRuntime().createMaterializedFrame(EMPTY_OBJECT_ARRAY, cachedFd);
-                pyFrame.setLocals(target);
-            }
-            assert cachedFd == target.getFrameDescriptor();
-            int slotCount = slotCountProfile.profile(inliningTarget, variableSlotCount(cachedFd));
-
+                        @Exclusive @Cached InlinedBranchProfile createLocalsProfile) {
             if (PythonOptions.ENABLE_BYTECODE_DSL_INTERPRETER) {
-                CompilerAsserts.partialEvaluationConstant(location);
                 BytecodeNode bytecodeNode = BytecodeNode.get(location);
                 if (bytecodeNode != null) {
-                    bytecodeNode.copyLocalValues(0, frameToSync, target, 0, slotCount);
+                    // TODO: avoid always making a copy, if a BytecodeFrame is set, just update it
+                    BytecodeFrame copiedFrame = bytecodeNode.createCopiedFrame(0, frameToSync);
+                    pyFrame.setBytecodeFrame(copiedFrame);
                 }
             } else {
+                FrameDescriptor cachedFd = frameDescriptorProfile.profile(frameToSync.getFrameDescriptor());
+                MaterializedFrame target = pyFrame.getLocals();
+                if (pyFrame.getLocals() == null) {
+                    createLocalsProfile.enter(inliningTarget);
+                    target = Truffle.getRuntime().createMaterializedFrame(EMPTY_OBJECT_ARRAY, cachedFd);
+                    pyFrame.setLocals(target);
+                }
+                assert cachedFd == target.getFrameDescriptor();
+                int slotCount = slotCountProfile.profile(inliningTarget, variableSlotCount(cachedFd));
                 frameToSync.copyTo(0, target, 0, slotCount);
             }
         }
@@ -318,8 +337,19 @@ public abstract class MaterializeFrameNode extends Node {
         }
 
         @Specialization(guards = "isGeneratorFrame(frameToSync)")
-        static void doGenerator(PFrame pyFrame, Frame frameToSync, @SuppressWarnings("unused") Node location) {
-            pyFrame.setLocals(PGenerator.getGeneratorFrame(frameToSync));
+        static void doGenerator(PFrame pyFrame, Frame frameToSync, @SuppressWarnings("unused") Node location,
+                        @Bind Node inliningTarget,
+                        @Exclusive @Cached InlinedBranchProfile createLocalsProfile) {
+            if (PythonOptions.ENABLE_BYTECODE_DSL_INTERPRETER) {
+                BytecodeNode bytecodeNode = BytecodeNode.get(location);
+                assert bytecodeNode != null : location;
+                if (pyFrame.getBytecodeFrame() == null) {
+                    createLocalsProfile.enter(inliningTarget);
+                    pyFrame.setBytecodeFrame(bytecodeNode.createMaterializedFrame(0, frameToSync.materialize()));
+                }
+            } else {
+                pyFrame.setLocals(PGenerator.getGeneratorFrame(frameToSync));
+            }
         }
 
         @Idempotent

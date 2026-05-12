@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024, 2025, Oracle and/or its affiliates.
+ * Copyright (c) 2024, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -25,12 +25,15 @@
  */
 package com.oracle.graal.python.builtins.modules;
 
+import static com.oracle.graal.python.PythonLanguage.MAGIC_NUMBER_BYTES;
+import static com.oracle.graal.python.builtins.PythonBuiltinClassType.SystemError;
 import static com.oracle.graal.python.builtins.PythonBuiltinClassType.ValueError;
 import static com.oracle.graal.python.builtins.modules.io.IONodes.T_READ;
 import static com.oracle.graal.python.builtins.modules.io.IONodes.T_READINTO;
 import static com.oracle.graal.python.builtins.modules.io.IONodes.T_WRITE;
 import static com.oracle.graal.python.nodes.StringLiterals.T_VERSION;
 import static com.oracle.graal.python.nodes.truffle.TruffleStringMigrationHelpers.isJavaString;
+import static com.oracle.graal.python.util.PythonUtils.ARRAY_ACCESSOR_LE;
 import static com.oracle.graal.python.util.PythonUtils.EMPTY_BOOLEAN_ARRAY;
 import static com.oracle.graal.python.util.PythonUtils.EMPTY_DOUBLE_ARRAY;
 import static com.oracle.graal.python.util.PythonUtils.EMPTY_INT_ARRAY;
@@ -51,11 +54,14 @@ import java.io.InputStream;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.channels.SeekableByteChannel;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
-import java.util.function.Supplier;
+import java.util.Set;
 
 import com.oracle.graal.python.PythonLanguage;
 import com.oracle.graal.python.annotations.ArgumentClinic;
@@ -112,7 +118,6 @@ import com.oracle.graal.python.nodes.ErrorMessages;
 import com.oracle.graal.python.nodes.PRaiseNode;
 import com.oracle.graal.python.nodes.StringLiterals;
 import com.oracle.graal.python.nodes.bytecode_dsl.BytecodeDSLCodeUnit;
-import com.oracle.graal.python.nodes.bytecode_dsl.BytecodeDSLCodeUnitAndRoot;
 import com.oracle.graal.python.nodes.bytecode_dsl.PBytecodeDSLRootNode;
 import com.oracle.graal.python.nodes.bytecode_dsl.PBytecodeDSLRootNodeGen;
 import com.oracle.graal.python.nodes.call.special.LookupAndCallBinaryNode;
@@ -120,6 +125,7 @@ import com.oracle.graal.python.nodes.function.PythonBuiltinBaseNode;
 import com.oracle.graal.python.nodes.function.PythonBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonBinaryClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.PythonTernaryClinicBuiltinNode;
+import com.oracle.graal.python.nodes.function.builtins.PythonUnaryClinicBuiltinNode;
 import com.oracle.graal.python.nodes.function.builtins.clinic.ArgumentClinicProvider;
 import com.oracle.graal.python.runtime.ExecutionContext.BoundaryCallContext;
 import com.oracle.graal.python.runtime.IndirectCallData.BoundaryCallData;
@@ -135,9 +141,10 @@ import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.RootCallTarget;
+import com.oracle.truffle.api.TruffleFile;
 import com.oracle.truffle.api.bytecode.BytecodeConfig;
 import com.oracle.truffle.api.bytecode.BytecodeRootNodes;
-import com.oracle.truffle.api.bytecode.serialization.BytecodeDeserializer;
+import com.oracle.truffle.api.bytecode.serialization.ByteBufferDataInput;
 import com.oracle.truffle.api.bytecode.serialization.BytecodeSerializer;
 import com.oracle.truffle.api.bytecode.serialization.SerializationUtils;
 import com.oracle.truffle.api.dsl.Bind;
@@ -191,7 +198,7 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
             Object savedState = BoundaryCallContext.enter(frame, threadState, boundaryCallData);
             byte[] data;
             try {
-                data = Marshal.dump(context, value, version);
+                data = Marshal.dump(language, value, version);
             } catch (IOException e) {
                 throw CompilerDirectives.shouldNotReachHere(e);
             } catch (Marshal.MarshalError me) {
@@ -222,7 +229,7 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
             PythonContext.PythonThreadState threadState = context.getThreadState(language);
             Object savedState = BoundaryCallContext.enter(frame, threadState, boundaryCallData);
             try {
-                return PFactory.createBytes(language, Marshal.dump(context, value, version));
+                return PFactory.createBytes(language, Marshal.dump(language, value, version));
             } catch (IOException e) {
                 throw CompilerDirectives.shouldNotReachHere(e);
             } catch (Marshal.MarshalError me) {
@@ -248,12 +255,13 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
                         @Cached("createCallReadNode()") LookupAndCallBinaryNode callNode,
                         @CachedLibrary(limit = "3") PythonBufferAcquireLibrary bufferLib,
                         @Cached PRaiseNode raiseNode) {
+            PythonLanguage language = context.getLanguage(inliningTarget);
             Object buffer = callNode.executeObject(frame, file, 0);
             if (!bufferLib.hasBuffer(buffer)) {
                 throw raiseNode.raise(inliningTarget, PythonBuiltinClassType.TypeError, ErrorMessages.READ_RETURNED_NOT_BYTES, buffer);
             }
             try {
-                return Marshal.loadFile(context, file);
+                return Marshal.loadFile(language, file);
             } catch (NumberFormatException e) {
                 throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.BAD_MARSHAL_DATA_S, e.getMessage());
             } catch (Marshal.MarshalError me) {
@@ -262,18 +270,13 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
         }
     }
 
-    /*
-     * cache_key is a GraalPy-specific keyword used in the code cache in multi-context mode,
-     * together with the filename from the unmarshalled code
-     */
-    @Builtin(name = "loads", minNumOfPositionalArgs = 1, numOfPositionalOnlyArgs = 1, parameterNames = {"bytes"}, keywordOnlyNames = {"cache_key"})
+    @Builtin(name = "loads", minNumOfPositionalArgs = 1, numOfPositionalOnlyArgs = 1, parameterNames = {"bytes"})
     @ArgumentClinic(name = "bytes", conversion = ClinicConversion.ReadableBuffer)
-    @ArgumentClinic(name = "cache_key", conversion = ClinicConversion.Long, defaultValue = "0")
     @GenerateNodeFactory
-    abstract static class LoadsNode extends PythonBinaryClinicBuiltinNode {
+    abstract static class LoadsNode extends PythonUnaryClinicBuiltinNode {
 
         @Specialization
-        static Object doit(VirtualFrame frame, Object buffer, long cacheKey,
+        static Object doit(VirtualFrame frame, Object buffer,
                         @Bind Node inliningTarget,
                         @Bind PythonContext context,
                         @Cached("createFor($node)") InteropCallData callData,
@@ -283,10 +286,11 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
             try {
                 byte[] bytes = bufferLib.getInternalOrCopiedByteArray(buffer);
                 int length = bufferLib.getBufferLength(buffer);
-                if (!language.isSingleContext() && cacheKey < 0) {
+                long cacheKey = 0;
+                if (!language.isSingleContext()) {
                     cacheKey = language.cacheKeyForBytecode(bytes, length);
                 }
-                return Marshal.load(context, bytes, length, cacheKey);
+                return Marshal.load(language, bytes, length, cacheKey);
             } catch (NumberFormatException e) {
                 throw raiseNode.raise(inliningTarget, ValueError, ErrorMessages.BAD_MARSHAL_DATA_S, e.getMessage());
             } catch (Marshal.MarshalError me) {
@@ -303,7 +307,7 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
 
     }
 
-    static final class Marshal {
+    public static final class Marshal {
         private static final char TYPE_NULL = '0';
         private static final char TYPE_NONE = 'N';
         private static final char TYPE_NOVALUE = 'n';
@@ -343,7 +347,6 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
         private static final char TYPE_ARRAY = ']';
         // These are constants that show up in the Bytecode DSL interpreter.
         private static final char TYPE_GRAALPYTHON_DSL_CODE_UNIT = 'D';
-        private static final char TYPE_GRAALPYTHON_DSL_CODE_UNIT_AND_ROOT = 'K';
         private static final char TYPE_DSL_SOURCE = '$';
         private static final char TYPE_DSL_EMPTY_KEYWORDS = 'k';
 
@@ -390,15 +393,15 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
         }
 
         @TruffleBoundary
-        static byte[] dump(PythonContext context, Object value, int version) throws IOException, MarshalError {
-            Marshal outMarshal = new Marshal(context, version, context.getTrue(), context.getFalse());
+        static byte[] dump(PythonLanguage language, Object value, int version) throws IOException, MarshalError {
+            Marshal outMarshal = new Marshal(language, version);
             outMarshal.writeObject(value);
             return outMarshal.outData.toByteArray();
         }
 
         @TruffleBoundary
-        static Object load(PythonContext context, byte[] ary, int length, long cacheKey) throws NumberFormatException, MarshalError {
-            Marshal inMarshal = new Marshal(context, ary, length, cacheKey);
+        static Object load(PythonLanguage language, byte[] ary, int length, long cacheKey) throws NumberFormatException, MarshalError {
+            Marshal inMarshal = new Marshal(language, ary, length, cacheKey);
             Object result = inMarshal.readObject();
             if (result == null) {
                 throw new MarshalError(PythonBuiltinClassType.TypeError, ErrorMessages.BAD_MARSHAL_DATA_NULL);
@@ -407,8 +410,8 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
         }
 
         @TruffleBoundary
-        static Object loadFile(PythonContext context, Object file) throws NumberFormatException, MarshalError {
-            Marshal inMarshal = new Marshal(context, file);
+        static Object loadFile(PythonLanguage language, Object file) throws NumberFormatException, MarshalError {
+            Marshal inMarshal = new Marshal(language, file);
             Object result = inMarshal.readObject();
             if (result == null) {
                 throw new MarshalError(PythonBuiltinClassType.TypeError, ErrorMessages.BAD_MARSHAL_DATA_NULL);
@@ -462,17 +465,20 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
             }
         }
 
-        private final PythonContext context;
+        private final PythonLanguage language;
         final HashMap<Object, Integer> refMap;
         final ArrayList<Object> refList;
         final ByteArrayOutputStream outData;
         final DataOutput out;
         final DataInput in;
         final int version;
-        final PInt pyTrue;
-        final PInt pyFalse;
         int depth = 0;
         long cacheKey;
+        TruffleFile bytecodeFile;
+        TruffleFile sourceFile;
+        // Offset of the buffer in parent buffer in nested deserializations
+        int baseOffset;
+
         /*
          * A DSL node needs access to its Source during deserialization, but we do not wish to
          * actually encode it in the serialized representation. Instead, we supply a Source to the
@@ -480,11 +486,9 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
          */
         Source source = null;
 
-        Marshal(PythonContext context, int version, PInt pyTrue, PInt pyFalse) {
-            this.context = context;
+        Marshal(PythonLanguage language, int version) {
+            this.language = language;
             this.version = version;
-            this.pyTrue = pyTrue;
-            this.pyFalse = pyFalse;
             this.outData = new ByteArrayOutputStream();
             this.out = new DataOutputStream(outData);
             this.refMap = new HashMap<>();
@@ -492,11 +496,9 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
             this.refList = null;
         }
 
-        Marshal(PythonContext context, int version, PInt pyTrue, PInt pyFalse, DataOutput out) {
-            this.context = context;
+        Marshal(PythonLanguage language, int version, DataOutput out) {
+            this.language = language;
             this.version = version;
-            this.pyTrue = pyTrue;
-            this.pyFalse = pyFalse;
             this.outData = null;
             this.out = out;
             this.refMap = new HashMap<>();
@@ -504,30 +506,31 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
             this.refList = null;
         }
 
-        Marshal(PythonContext context, byte[] in, int length, long cacheKey) {
-            this(context, SerializationUtils.createDataInput(ByteBuffer.wrap(in, 0, length)), null);
+        Marshal(PythonLanguage language, byte[] in, int length, long cacheKey) {
+            this(language, SerializationUtils.createByteBufferDataInput(ByteBuffer.wrap(in, 0, length)), null, null, 0);
             this.cacheKey = cacheKey;
         }
 
-        Marshal(PythonContext context, Object in) {
-            this(context, new DataInputStream(new FileLikeInputStream(in)), null);
+        Marshal(PythonLanguage language, byte[] in, int length, long cacheKey, TruffleFile bytecodeFile, int baseOffset) {
+            this(language, SerializationUtils.createByteBufferDataInput(ByteBuffer.wrap(in, 0, length)), null, bytecodeFile, baseOffset);
+            this.cacheKey = cacheKey;
         }
 
-        Marshal(PythonContext context, DataInput in, Source source) {
-            this.context = context;
+        Marshal(PythonLanguage language, Object in) {
+            this(language, new DataInputStream(new FileLikeInputStream(in)), null, null, 0);
+        }
+
+        Marshal(PythonLanguage language, DataInput in, Source source, TruffleFile bytecodeFile, int baseOffset) {
+            this.language = language;
             this.in = in;
             this.source = source;
             this.refList = new ArrayList<>();
             this.version = -1;
-            this.pyTrue = null;
-            this.pyFalse = null;
             this.outData = null;
             this.out = null;
             this.refMap = null;
-        }
-
-        private PythonLanguage getLanguage() {
-            return context.getLanguage();
+            this.bytecodeFile = bytecodeFile;
+            this.baseOffset = baseOffset;
         }
 
         private void writeByte(int v) {
@@ -768,9 +771,9 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
                 writeByte(TYPE_STOPITER);
             } else if (v == PEllipsis.INSTANCE) {
                 writeByte(TYPE_ELLIPSIS);
-            } else if (v == Boolean.TRUE || v == pyTrue) {
+            } else if (v == Boolean.TRUE || v instanceof PInt i && i.getPythonClass() == PythonBuiltinClassType.Boolean && i.isOne()) {
                 writeByte(TYPE_TRUE);
-            } else if (v == Boolean.FALSE || v == pyFalse) {
+            } else if (v == Boolean.FALSE || v instanceof PInt i && i.getPythonClass() == PythonBuiltinClassType.Boolean && i.isZero()) {
                 writeByte(TYPE_FALSE);
             } else if (v instanceof Integer) {
                 writeByte(TYPE_INT);
@@ -789,16 +792,6 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
             } else if (v instanceof BigInteger) {
                 writeByte(TYPE_BIG_INTEGER);
                 writeBigInteger((BigInteger) v);
-            } else if (v instanceof BytecodeDSLCodeUnitAndRoot unitAndRoot) {
-                // BytecodeDSLCodeUnit data should be deserialized to BytecodeDSLCodeUnit if we are
-                // deserializing a constant in the constants array of BytecodeDSLCodeUnit, otherwise
-                // if we are deserializing a constant operand of MakeFunction operation, we should
-                // deserialize it to BytecodeDSLCodeUnitAndRoot.
-                // In the deserializer we would have to pass down some context to know whether to
-                // deserialize to one or the other. Instead, we write this extra byte that allows us
-                // to distinguish this locally during deserialization.
-                writeByte(TYPE_GRAALPYTHON_DSL_CODE_UNIT_AND_ROOT);
-                writeReferenceOrComplexObject(unitAndRoot.getCodeUnit());
             } else {
                 writeReferenceOrComplexObject(v);
             }
@@ -1089,17 +1082,17 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
                 case TYPE_BIG_INTEGER:
                     return readBigInteger();
                 case TYPE_LONG:
-                    return addRef.run(PFactory.createInt(getLanguage(), readBigInteger()));
+                    return addRef.run(PFactory.createInt(language, readBigInteger()));
                 case TYPE_FLOAT:
                     return addRef.run(readDoubleString());
                 case TYPE_BINARY_FLOAT:
                     return addRef.run(readDouble());
                 case TYPE_COMPLEX:
-                    return addRef.run(PFactory.createComplex(getLanguage(), readDoubleString(), readDoubleString()));
+                    return addRef.run(PFactory.createComplex(language, readDoubleString(), readDoubleString()));
                 case TYPE_BINARY_COMPLEX:
-                    return addRef.run(PFactory.createComplex(getLanguage(), readDouble(), readDouble()));
+                    return addRef.run(PFactory.createComplex(language, readDouble(), readDouble()));
                 case TYPE_STRING:
-                    return addRef.run(PFactory.createBytes(getLanguage(), readBytes()));
+                    return addRef.run(PFactory.createBytes(language, readBytes()));
                 case TYPE_ASCII_INTERNED:
                     return addRef.run(readAscii(readSize(), true));
                 case TYPE_ASCII:
@@ -1115,24 +1108,24 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
                 case TYPE_SMALL_TUPLE:
                     int smallTupleSize = readByteSize();
                     Object[] smallTupleItems = new Object[smallTupleSize];
-                    Object smallTuple = addRef.run(PFactory.createTuple(getLanguage(), smallTupleItems));
+                    Object smallTuple = addRef.run(PFactory.createTuple(language, smallTupleItems));
                     readArray(smallTupleItems);
                     return smallTuple;
                 case TYPE_TUPLE:
                     int tupleSize = readSize();
                     Object[] tupleItems = new Object[tupleSize];
-                    Object tuple = addRef.run(PFactory.createTuple(getLanguage(), tupleItems));
+                    Object tuple = addRef.run(PFactory.createTuple(language, tupleItems));
                     readArray(tupleItems);
                     return tuple;
                 case TYPE_LIST:
                     int listSize = readSize();
                     Object[] listItems = new Object[listSize];
-                    Object list = addRef.run(PFactory.createList(getLanguage(), listItems));
+                    Object list = addRef.run(PFactory.createList(language, listItems));
                     readArray(listItems);
                     return list;
                 case TYPE_DICT:
                     HashingStorage store = PDict.createNewStorage(0);
-                    PDict dict = PFactory.createDict(getLanguage(), store);
+                    PDict dict = PFactory.createDict(language, store);
                     addRef.run(dict);
                     while (true) {
                         Object key = readObject();
@@ -1152,9 +1145,9 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
                     HashingStorage setStore = EconomicMapStorage.create(setSz);
                     PBaseSet set;
                     if (type == TYPE_FROZENSET) {
-                        set = PFactory.createFrozenSet(getLanguage(), setStore);
+                        set = PFactory.createFrozenSet(language, setStore);
                     } else {
-                        set = PFactory.createSet(getLanguage(), setStore);
+                        set = PFactory.createSet(language, setStore);
                     }
                     addRef.run(set);
                     for (int i = 0; i < setSz; i++) {
@@ -1172,13 +1165,6 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
                     return addRef.run(readBytecodeCodeUnit());
                 case TYPE_GRAALPYTHON_DSL_CODE_UNIT:
                     return addRef.run(readBytecodeDSLCodeUnit());
-                case TYPE_GRAALPYTHON_DSL_CODE_UNIT_AND_ROOT:
-                    Object co = readObject();
-                    if (co instanceof BytecodeDSLCodeUnit dslUnit) {
-                        return new BytecodeDSLCodeUnitAndRoot(dslUnit);
-                    } else {
-                        throw new MarshalError(ValueError, ErrorMessages.BAD_MARSHAL_DATA);
-                    }
                 case TYPE_DSL_SOURCE:
                     return getSource();
                 case TYPE_DSL_EMPTY_KEYWORDS:
@@ -1221,12 +1207,12 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
         private TruffleString readShortString() {
             int sz = readByteSize();
             byte[] bytes = readNBytes(sz);
-            return TruffleString.fromByteArrayUncached(bytes, 0, sz, Encoding.ISO_8859_1, false).switchEncodingUncached(TS_ENCODING);
+            return TruffleString.fromByteArrayWithCompactionUTF32Uncached(bytes, 0, sz, TruffleString.CompactionLevel.S1, false);
         }
 
         private Object readAscii(int sz, boolean intern) {
             byte[] bytes = readNBytes(sz);
-            TruffleString value = TruffleString.fromByteArrayUncached(bytes, 0, sz, Encoding.US_ASCII, false).switchEncodingUncached(TS_ENCODING);
+            TruffleString value = TruffleString.fromByteArrayWithCompactionUTF32Uncached(bytes, 0, sz, TruffleString.CompactionLevel.S1, false);
             if (intern) {
                 return PythonUtils.internString(value);
             } else {
@@ -1434,7 +1420,12 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
                                                 "Attempted to deserialize a code object from the Bytecode DSL interpreter, but the manual interpreter is enabled. Consider clearing or setting a different pycache folder."));
             }
 
-            byte[] serialized = readBytes();
+            int bytecodeSize = readSize();
+            int bytecodeOffset = -1;
+            if (in instanceof ByteBufferDataInput bufferIn) {
+                bytecodeOffset = baseOffset + bufferIn.position();
+            }
+            byte[] serialized = readNBytes(bytecodeSize, new byte[bytecodeSize]);
             TruffleString name = readString(true);
             TruffleString qualname = readString(true);
             int argCount = readInt();
@@ -1456,9 +1447,12 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
             int endColumn = readInt();
             int classcellIndex = readInt();
             int selfIndex = readInt();
+            int yieldFromGeneratorIndex = readInt();
+            int instrumentationDataIndex = readInt();
 
+            BytecodeSupplier provider = new BytecodeSupplier(serialized, bytecodeFile, bytecodeOffset, bytecodeSize, cacheKey);
             return new BytecodeDSLCodeUnit(name, qualname, argCount, kwOnlyArgCount, positionalOnlyArgCount, flags, names, varnames, cellvars, freevars, cell2arg, constants,
-                            startLine, startColumn, endLine, endColumn, classcellIndex, selfIndex, serialized, null);
+                            startLine, startColumn, endLine, endColumn, classcellIndex, selfIndex, yieldFromGeneratorIndex, instrumentationDataIndex, provider);
         }
 
         private void writeCodeUnit(CodeUnit code) throws IOException {
@@ -1507,9 +1501,13 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
             writeIntArray(code.generalizeVarsValues);
         }
 
-        @SuppressWarnings("unchecked")
         private void writeBytecodeDSLCodeUnit(BytecodeDSLCodeUnit code) throws IOException {
-            byte[] serialized = code.getSerialized(context);
+            /*
+             * Nested code units referenced by MakeFunction are stored in co_consts; the
+             * MakeFunction instruction itself carries only the integer index into this constants
+             * array.
+             */
+            byte[] serialized = code.getSerialized(language);
             writeBytes(serialized);
             writeString(code.name);
             writeString(code.qualname);
@@ -1533,6 +1531,8 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
             writeInt(code.endColumn);
             writeInt(code.classcellIndex);
             writeInt(code.selfIndex);
+            writeInt(code.yieldFromGeneratorIndex);
+            writeInt(code.instrumentationDataIndex);
         }
 
         private PCode readCode() {
@@ -1542,39 +1542,43 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
             int firstLineNo = readInt();
             byte[] lnoTab = readBytes();
             com.oracle.graal.python.util.Supplier<CallTarget> supplier = () -> {
-                String jFilename = fileName.toJavaStringUncached();
-                Source subSource = Source.newBuilder(PythonLanguage.ID, "", jFilename).content(Source.CONTENT_NONE).build();
-                return PythonLanguage.callTargetFromBytecode(context, subSource, code);
+                String jName = code.qualname.toJavaStringUncached();
+                Source source = Source.newBuilder(PythonLanguage.ID, "", jName).content(Source.CONTENT_NONE).build();
+                PythonLanguage language = this.language;
+                if (sourceFile != null) {
+                    language.registerOriginalFile(source, sourceFile);
+                }
+                return language.callTargetFromBytecode(source, code);
             };
             CallTarget callTarget;
-            if (context.getLanguage().isSingleContext() || cacheKey == 0) {
+            if (language.isSingleContext() || cacheKey == 0) {
                 callTarget = supplier.get();
             } else {
-                // get a new ID every time we deserialize the same filename in the same context
-                long fullCacheKey = cacheKey + context.getDeserializationId(fileName);
-                callTarget = context.getLanguage().cacheCode(new PythonLanguage.CodeCacheKey(fileName, fullCacheKey), supplier);
+                callTarget = language.cacheCode(new PythonLanguage.CodeCacheKey(fileName, cacheKey), supplier);
             }
-            return PFactory.createCode(context.getLanguage(), (RootCallTarget) callTarget, flags, firstLineNo, lnoTab, fileName);
+            return PFactory.createCode(language, (RootCallTarget) callTarget, flags, firstLineNo, lnoTab, fileName);
         }
     }
 
     @TruffleBoundary
-    public static byte[] serializeCodeUnit(Node locationForRaise, PythonContext context, CodeUnit code) {
+    public static byte[] serializeCodeUnit(Node locationForRaise, PythonLanguage language, CodeUnit code) {
         try {
-            Marshal marshal = new Marshal(context, CURRENT_VERSION, null, null);
+            Marshal marshal = new Marshal(language, CURRENT_VERSION);
             marshal.writeCodeUnit(code);
             return marshal.outData.toByteArray();
         } catch (IOException e) {
             throw CompilerDirectives.shouldNotReachHere(e);
         } catch (Marshal.MarshalError me) {
             throw PRaiseNode.raiseStatic(locationForRaise, me.type, me.message, me.arguments);
+        } catch (ReparseError e) {
+            throw PRaiseNode.raiseStatic(locationForRaise, SystemError, ErrorMessages.FAILED_TO_REPARSE_BYTECODE_FILE);
         }
     }
 
     @TruffleBoundary
-    public static CodeUnit deserializeCodeUnit(Node node, PythonContext context, byte[] bytes) {
+    public static CodeUnit deserializeCodeUnit(Node node, PythonLanguage language, byte[] bytes) {
         try {
-            Marshal marshal = new Marshal(context, bytes, bytes.length, 0);
+            Marshal marshal = new Marshal(language, bytes, bytes.length, 0);
             return marshal.readCodeUnit();
         } catch (Marshal.MarshalError me) {
             throw PRaiseNode.raiseStatic(node, me.type, me.message, me.arguments);
@@ -1583,47 +1587,120 @@ public final class MarshalModuleBuiltins extends PythonBuiltins {
         }
     }
 
-    public static BytecodeRootNodes<PBytecodeDSLRootNode> deserializeBytecodeNodes(PythonContext context, Source source, byte[] serialized) {
-        try {
-            Supplier<DataInput> supplier = () -> SerializationUtils.createDataInput(ByteBuffer.wrap(serialized));
-            return PBytecodeDSLRootNodeGen.deserialize(context.getLanguage(), BytecodeConfig.WITH_SOURCE, supplier, new MarshalModuleBuiltins.PBytecodeDSLDeserializer(context, source));
-        } catch (IOException e) {
-            throw CompilerDirectives.shouldNotReachHere("Deserialization error.");
+    public static class BytecodeSupplier extends BytecodeDSLCodeUnit.BytecodeSupplier {
+        private byte[] serialized;
+        // Original file for reparsing
+        private final TruffleFile bytecodeFile;
+        // Offset within the bytecode file, points directly at the start of serialized bytecode
+        private final int bytecodeOffset;
+        private final int bytecodeSize;
+        private final long cacheKey;
+
+        public BytecodeSupplier(byte[] serialized, TruffleFile bytecodeFile, int bytecodeOffset, int bytecodeSize, long cacheKey) {
+            this.serialized = serialized;
+            this.bytecodeFile = bytecodeFile;
+            this.bytecodeOffset = bytecodeOffset;
+            this.bytecodeSize = bytecodeSize;
+            this.cacheKey = cacheKey;
+        }
+
+        @Override
+        public PBytecodeDSLRootNode createRootNode(PythonLanguage language, Source source) {
+            BytecodeRootNodes<PBytecodeDSLRootNode> deserialized;
+            try {
+                deserialized = PBytecodeDSLRootNodeGen.deserialize(language, BytecodeConfig.WITH_SOURCE,
+                                () -> SerializationUtils.createByteBufferDataInput(ByteBuffer.wrap(getBytecode())),
+                                /*
+                                 * NB: Since a DSL node may reparse multiple times, we cannot reuse
+                                 * a common Marshal object across calls (each call may take a
+                                 * different buffer).
+                                 */
+                                (deserializerContext, buffer) -> {
+                                    Marshal marshal = new Marshal(language, buffer, source, bytecodeFile, bytecodeOffset);
+                                    marshal.cacheKey = cacheKey;
+                                    return marshal.readObject();
+                                });
+            } catch (IOException e) {
+                throw CompilerDirectives.shouldNotReachHere("Deserialization error.");
+            }
+            if (bytecodeFile != null && bytecodeOffset >= 0 && cacheKey != 0 && !language.getEngineOption(PythonOptions.KeepBytecodeInMemory)) {
+                // Free the serialized bytecode, we will fetch it from the file if needed again
+                serialized = null;
+            }
+            assert deserialized.count() == 1;
+            return deserialized.getNode(0);
+        }
+
+        byte[] getBytecodeFromFile() {
+            try (SeekableByteChannel channel = bytecodeFile.newByteChannel(Set.of(StandardOpenOption.READ))) {
+                ByteBuffer buffer = ByteBuffer.allocate(16);
+                int read = channel.read(buffer);
+                byte[] header = buffer.array();
+                if (read != 16) {
+                    throw new ReparseError("EOF when reparsing: " + bytecodeFile);
+                }
+                if (!Arrays.equals(header, 0, 4, MAGIC_NUMBER_BYTES, 0, 4)) {
+                    throw new ReparseError("Invalid bytecode file: " + bytecodeFile);
+                }
+                if (ARRAY_ACCESSOR_LE.getLong(header, 8) != cacheKey) {
+                    throw new ReparseError("Bytecode file was modified (header mismatch): " + bytecodeFile);
+                }
+                buffer = ByteBuffer.allocate(bytecodeSize);
+                channel.position(bytecodeOffset);
+                read = channel.read(buffer);
+                if (read != bytecodeSize) {
+                    throw new ReparseError("EOF when reparsing: " + bytecodeFile);
+                }
+                return buffer.array();
+            } catch (IOException e) {
+                throw new ReparseError("IOError when reparsing: " + bytecodeFile);
+            }
+        }
+
+        private byte[] getBytecode() {
+            if (serialized != null) {
+                return serialized;
+            }
+            return getBytecodeFromFile();
+        }
+
+        @Override
+        public byte[] createSerializedBytecode(PythonLanguage language) {
+            return getBytecode();
         }
     }
 
     public static class PBytecodeDSLSerializer implements BytecodeSerializer {
-        private final PythonContext pythonContext;
+        private final PythonLanguage language;
 
-        public PBytecodeDSLSerializer(PythonContext context) {
-            this.pythonContext = context;
+        public PBytecodeDSLSerializer(PythonLanguage language) {
+            this.language = language;
         }
 
+        @TruffleBoundary
         public void serialize(SerializerContext context, DataOutput buffer, Object object) throws IOException {
             /*
              * NB: Since the deserializer uses a fresh Marshal instance for each object (see below)
              * we must also do the same here. Otherwise, the encoding may be different (e.g., a
              * reference for an already-emitted object).
              */
-            new Marshal(pythonContext, CURRENT_VERSION, pythonContext.getTrue(), pythonContext.getFalse(), buffer).writeObject(object);
+            new Marshal(language, CURRENT_VERSION, buffer).writeObject(object);
         }
     }
 
-    public static class PBytecodeDSLDeserializer implements BytecodeDeserializer {
-        private final PythonContext pythonContext;
-        final Source source;
+    public static final class ReparseError extends RuntimeException {
+        static final long serialVersionUID = 5323687983726237119L;
 
-        public PBytecodeDSLDeserializer(PythonContext context, Source source) {
-            this.pythonContext = context;
-            this.source = source;
+        public ReparseError(String message) {
+            super(message);
         }
+    }
 
-        public Object deserialize(DeserializerContext context, DataInput buffer) throws IOException {
-            /*
-             * NB: Since a DSL node may reparse multiple times, we cannot reuse a common Marshal
-             * object across calls (each call may take a different buffer).
-             */
-            return new Marshal(pythonContext, buffer, source).readObject();
-        }
+    @TruffleBoundary
+    public static Object fromBytecodeFile(PythonLanguage language, TruffleFile bytecodeFile, TruffleFile sourceFile, byte[] bytes, int offset, int length, long cacheKey) throws IOException {
+        MarshalModuleBuiltins.Marshal marshal = new MarshalModuleBuiltins.Marshal(language, bytes, length + offset, cacheKey, bytecodeFile, 0);
+        marshal.sourceFile = sourceFile;
+        marshal.in.skipBytes(offset);
+        return marshal.readObject();
     }
 }

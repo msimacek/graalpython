@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates.
  * Copyright (c) 2013, Regents of the University of California
  *
  * All rights reserved.
@@ -25,6 +25,7 @@
  */
 package com.oracle.graal.python.runtime.object;
 
+import static com.oracle.graal.python.runtime.nativeaccess.NativeMemory.NULLPTR;
 import static com.oracle.graal.python.nodes.SpecialMethodNames.T___NEW__;
 import static com.oracle.graal.python.util.PythonUtils.EMPTY_OBJECT_ARRAY;
 
@@ -75,6 +76,7 @@ import com.oracle.graal.python.builtins.modules.pickle.PPickler;
 import com.oracle.graal.python.builtins.modules.pickle.PPicklerMemoProxy;
 import com.oracle.graal.python.builtins.modules.pickle.PUnpickler;
 import com.oracle.graal.python.builtins.modules.pickle.PUnpicklerMemoProxy;
+import com.oracle.graal.python.builtins.modules.pyexpat.PXMLParser;
 import com.oracle.graal.python.builtins.modules.zlib.JavaCompress;
 import com.oracle.graal.python.builtins.modules.zlib.JavaDecompress;
 import com.oracle.graal.python.builtins.modules.zlib.NativeZlibCompObject;
@@ -92,9 +94,8 @@ import com.oracle.graal.python.builtins.objects.bytes.PByteArray;
 import com.oracle.graal.python.builtins.objects.bytes.PBytes;
 import com.oracle.graal.python.builtins.objects.capsule.PyCapsule;
 import com.oracle.graal.python.builtins.objects.cell.PCell;
-import com.oracle.graal.python.builtins.objects.cext.PythonNativeVoidPtr;
 import com.oracle.graal.python.builtins.objects.cext.capi.ExternalFunctionNodes.PExternalFunctionWrapper;
-import com.oracle.graal.python.builtins.objects.cext.common.CArrayWrappers;
+import com.oracle.graal.python.builtins.objects.cext.capi.TruffleObjectNativeWrapper;
 import com.oracle.graal.python.builtins.objects.cext.common.CExtContext;
 import com.oracle.graal.python.builtins.objects.code.PCode;
 import com.oracle.graal.python.builtins.objects.common.DynamicObjectStorage;
@@ -271,12 +272,8 @@ public final class PFactory {
         return new PythonObject(cls, shape);
     }
 
-    public static PythonNativeVoidPtr createNativeVoidPtr(Object obj) {
-        return new PythonNativeVoidPtr(obj);
-    }
-
-    public static PythonNativeVoidPtr createNativeVoidPtr(Object obj, long nativePtr) {
-        return new PythonNativeVoidPtr(obj, nativePtr);
+    public static TruffleObjectNativeWrapper createPythonForeignObject(PythonLanguage language, Object clazz, Object foreignObject) {
+        return new TruffleObjectNativeWrapper(clazz, PythonBuiltinClassType.ForeignObject.getInstanceShape(language), foreignObject);
     }
 
     public static SuperObject createSuperObject(PythonLanguage language) {
@@ -461,7 +458,7 @@ public final class PFactory {
     }
 
     public static PMemoryView createMemoryView(PythonLanguage language, PythonContext context, BufferLifecycleManager bufferLifecycleManager, Object buffer, Object owner,
-                    int len, boolean readonly, int itemsize, BufferFormat format, TruffleString formatString, int ndim, Object bufPointer,
+                    int len, boolean readonly, int itemsize, BufferFormat format, TruffleString formatString, int ndim, long bufPointer,
                     int offset, int[] shape, int[] strides, int[] suboffsets, int flags) {
         PythonBuiltinClassType cls = PythonBuiltinClassType.PMemoryView;
         return new PMemoryView(cls, cls.getInstanceShape(language), context, bufferLifecycleManager, buffer, owner, len, readonly, itemsize, format, formatString,
@@ -469,10 +466,10 @@ public final class PFactory {
     }
 
     public static PMemoryView createMemoryViewForManagedObject(PythonLanguage language, Object buffer, Object owner, int itemsize, int length, boolean readonly, TruffleString format,
-                    TruffleString.CodePointLengthNode lengthNode, TruffleString.CodePointAtIndexNode atIndexNode) {
+                    TruffleString.CodePointLengthNode lengthNode, TruffleString.CodePointAtIndexUTF32Node atIndexNode) {
         PythonBuiltinClassType cls = PythonBuiltinClassType.PMemoryView;
         return new PMemoryView(cls, cls.getInstanceShape(language), null, null, buffer, owner, length, readonly, itemsize,
-                        BufferFormat.forMemoryView(format, lengthNode, atIndexNode), format, 1, null, 0, new int[]{length / itemsize}, new int[]{itemsize}, null,
+                        BufferFormat.forMemoryView(format, lengthNode, atIndexNode), format, 1, NULLPTR, 0, new int[]{length / itemsize}, new int[]{itemsize}, null,
                         PMemoryView.FLAG_C | PMemoryView.FLAG_FORTRAN);
     }
 
@@ -506,11 +503,6 @@ public final class PFactory {
 
     public static PFunction createFunction(PythonLanguage language, TruffleString name, PCode code, PythonObject globals, PCell[] closure) {
         return new PFunction(language, name, name, code, globals, closure);
-    }
-
-    public static PFunction createFunction(PythonLanguage language, TruffleString name, TruffleString qualname, PCode code, PythonObject globals, Object[] defaultValues, PKeyword[] kwDefaultValues,
-                    PCell[] closure) {
-        return new PFunction(language, name, qualname, code, globals, defaultValues, kwDefaultValues, closure);
     }
 
     public static PFunction createFunction(PythonLanguage language, TruffleString name, PCode code, PythonObject globals, Object[] defaultValues, PKeyword[] kwDefaultValues, PCell[] closure) {
@@ -857,11 +849,11 @@ public final class PFactory {
      * Frames, traces and exceptions
      */
 
-    public static PFrame createPFrame(PythonLanguage language, PFrame.Reference frameInfo, Node location, boolean hasCustomLocals) {
-        return new PFrame(language, frameInfo, location, hasCustomLocals);
+    public static PFrame createPFrame(PythonLanguage language, PFrame.Reference frameInfo, Node location, Object functionOrCode, boolean hasCustomLocals) {
+        return new PFrame(language, frameInfo, location, functionOrCode, hasCustomLocals);
     }
 
-    public static PFrame createPFrame(PythonLanguage language, Object threadState, PCode code, PythonObject globals, Object localsDict) {
+    public static PFrame createPFrame(PythonLanguage language, long threadState, PCode code, PythonObject globals, Object localsDict) {
         return new PFrame(language, threadState, code, globals, localsDict);
     }
 
@@ -1084,16 +1076,20 @@ public final class PFactory {
         return new PCode(PythonBuiltinClassType.PCode, PythonBuiltinClassType.PCode.getInstanceShape(language), ct);
     }
 
+    public static PCode createCode(PythonLanguage language, RootCallTarget ct, TruffleString filename) {
+        return new PCode(PythonBuiltinClassType.PCode, PythonBuiltinClassType.PCode.getInstanceShape(language), ct, filename);
+    }
+
     public static PCode createCode(PythonLanguage language, RootCallTarget ct, int flags, int firstlineno, byte[] linetable, TruffleString filename) {
         return new PCode(PythonBuiltinClassType.PCode, PythonBuiltinClassType.PCode.getInstanceShape(language), ct, flags, firstlineno, linetable, filename);
     }
 
-    public static PCode createCode(PythonLanguage language, RootCallTarget callTarget, Signature signature, BytecodeCodeUnit codeUnit) {
-        return new PCode(PythonBuiltinClassType.PCode, PythonBuiltinClassType.PCode.getInstanceShape(language), callTarget, signature, codeUnit);
+    public static PCode createCode(PythonLanguage language, RootCallTarget callTarget, Signature signature, BytecodeCodeUnit codeUnit, TruffleString filename) {
+        return new PCode(PythonBuiltinClassType.PCode, PythonBuiltinClassType.PCode.getInstanceShape(language), callTarget, signature, codeUnit, filename);
     }
 
-    public static PCode createCode(PythonLanguage language, RootCallTarget callTarget, Signature signature, BytecodeDSLCodeUnit codeUnit) {
-        return new PCode(PythonBuiltinClassType.PCode, PythonBuiltinClassType.PCode.getInstanceShape(language), callTarget, signature, codeUnit);
+    public static PCode createCode(PythonLanguage language, RootCallTarget callTarget, Signature signature, BytecodeDSLCodeUnit codeUnit, TruffleString filename) {
+        return new PCode(PythonBuiltinClassType.PCode, PythonBuiltinClassType.PCode.getInstanceShape(language), callTarget, signature, codeUnit, filename);
     }
 
     public static PCode createCode(PythonLanguage language, RootCallTarget callTarget, Signature signature, int nlocals,
@@ -1458,6 +1454,10 @@ public final class PFactory {
         return new PJSONEncoder(cls, shape, markers, defaultFn, encoder, indent, keySeparator, itemSeparator, sortKeys, skipKeys, allowNan, fastEncode);
     }
 
+    public static PXMLParser createXMLParser(Object cls, Shape shape, TruffleString namespaceSeparator) {
+        return new PXMLParser(cls, shape, namespaceSeparator);
+    }
+
     public static PDeque createDeque(PythonLanguage language) {
         return new PDeque(PythonBuiltinClassType.PDeque, PythonBuiltinClassType.PDeque.getInstanceShape(language));
     }
@@ -1528,12 +1528,8 @@ public final class PFactory {
         return DigestObject.create(type, type.getInstanceShape(language), name, digest);
     }
 
-    public static PyCapsule createCapsuleNativeName(PythonLanguage language, Object pointer, Object name) {
+    public static PyCapsule createCapsuleNativeName(PythonLanguage language, long pointer, long name) {
         return createCapsule(language, new PyCapsule.CapsuleData(pointer, name));
-    }
-
-    public static PyCapsule createCapsuleJavaName(PythonLanguage language, Object pointer, byte[] name) {
-        return createCapsule(language, new PyCapsule.CapsuleData(pointer, new CArrayWrappers.CByteArrayWrapper(name)));
     }
 
     public static PyCapsule createCapsule(PythonLanguage language, PyCapsule.CapsuleData data) {

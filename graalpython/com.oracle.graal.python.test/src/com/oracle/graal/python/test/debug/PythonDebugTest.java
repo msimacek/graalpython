@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,6 +40,7 @@
  */
 package com.oracle.graal.python.test.debug;
 
+import static com.oracle.graal.python.test.integration.PythonTests.eval;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -59,7 +60,6 @@ import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Context.Builder;
 import org.graalvm.polyglot.Source;
 import org.junit.After;
-import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -82,6 +82,7 @@ public class PythonDebugTest {
         Builder newBuilder = Context.newBuilder();
         newBuilder.allowExperimentalOptions(true);
         newBuilder.allowAllAccess(true);
+        newBuilder.option("engine.WarnInterpreterOnly", "false");
         PythonTests.closeContext();
         tester = new DebuggerTester(newBuilder);
     }
@@ -93,9 +94,9 @@ public class PythonDebugTest {
 
     @Test
     public void testSteppingAsExpected() throws Throwable {
-        Assume.assumeFalse("TODO: debugger tests are broken on Bytecode DSL", Boolean.getBoolean("python.EnableBytecodeDSLInterpreter"));
         // test that various elements step as expected, including generators, statement level atomic
         // expressions, and roots
+        boolean isBytecodeDLS = isBytecodeDSL();
         final Source source = Source.newBuilder("python", "" +
                         "import sys\n" +
                         "from sys import version\n" +
@@ -160,16 +161,30 @@ public class PythonDebugTest {
                 assertEquals(7, frame.getSourceSection().getStartLine());
                 event.prepareStepOver(1);
             });
+            // for i in >genfunc()<:
             expectSuspended((SuspendedEvent event) -> {
                 DebugStackFrame frame = event.getTopStackFrame();
                 assertEquals(8, frame.getSourceSection().getStartLine());
                 event.prepareStepInto(1);
             });
-            expectSuspended((SuspendedEvent event) -> {
-                DebugStackFrame frame = event.getTopStackFrame();
-                assertEquals(12, frame.getSourceSection().getStartLine());
-                event.prepareStepOver(1);
-            });
+            // Unlike the manual interpreter, which reports yield as onReturn, the Bytecode DSL
+            // correctly reports yield as onYield on the probe node, but the step over strategy
+            // is different for yield vs return - see SteppingStrategy$StepOver#step
+            if (!isBytecodeDLS) {
+                // steppping into genfunc()
+                expectSuspended((SuspendedEvent event) -> {
+                    DebugStackFrame frame = event.getTopStackFrame();
+                    assertEquals(12, frame.getSourceSection().getStartLine());
+                    event.prepareStepOver(1);
+                });
+            } else {
+                // steppping into genfunc()
+                expectSuspended((SuspendedEvent event) -> {
+                    DebugStackFrame frame = event.getTopStackFrame();
+                    assertEquals(12, frame.getSourceSection().getStartLine());
+                    event.prepareStepOut(1);
+                });
+            }
             expectSuspended((SuspendedEvent event) -> {
                 DebugStackFrame frame = event.getTopStackFrame();
                 assertEquals(8, frame.getSourceSection().getStartLine());
@@ -186,7 +201,6 @@ public class PythonDebugTest {
 
     @Test
     public void testException() throws Throwable {
-        Assume.assumeFalse("TODO: debugger tests are broken on Bytecode DSL", Boolean.getBoolean("python.EnableBytecodeDSLInterpreter"));
         final Source source = Source.newBuilder("python", "" +
                         "try:\n" +
                         "  1 / 0\n" +
@@ -210,32 +224,44 @@ public class PythonDebugTest {
 
     @Test
     public void testInlineEvaluation() throws Throwable {
-        Assume.assumeFalse("TODO: debugger tests are broken on Bytecode DSL", Boolean.getBoolean("python.EnableBytecodeDSLInterpreter"));
         final Source source = Source.newBuilder("python", "" +
                         "y = 4\n" +
                         "def foo(x):\n" +
                         "  a = 1\n" +
                         "  b = 2\n" +
-                        "  def bar():\n" +
+                        "  q = 42\n" +
+                        "  def bar(z = 24):\n" +
                         "    return a + b\n" +
                         "  return bar() + x + y\n" +
                         "foo(3)", "test_inline.py").buildLiteral();
 
         try (DebuggerSession session = tester.startSession()) {
-            session.install(Breakpoint.newBuilder(DebuggerTester.getSourceImpl(source)).lineIs(5).build());
+            session.install(Breakpoint.newBuilder(DebuggerTester.getSourceImpl(source)).lineIs(6).build());
             session.install(Breakpoint.newBuilder(DebuggerTester.getSourceImpl(source)).lineIs(7).build());
+            session.install(Breakpoint.newBuilder(DebuggerTester.getSourceImpl(source)).lineIs(8).build());
             tester.startEval(source);
 
+            // breakpoint at bar declaration
             expectSuspended((SuspendedEvent event) -> {
                 DebugStackFrame frame = event.getTopStackFrame();
-                assertEquals(5, frame.getSourceSection().getStartLine());
+                assertEquals("42", frame.eval("q").toDisplayString());
                 assertEquals("3", frame.eval("a + b").toDisplayString());
+                assertEquals(6, frame.getSourceSection().getStartLine());
                 event.prepareContinue();
             });
+            // breakpoint at bar call site
             expectSuspended((SuspendedEvent event) -> {
                 DebugStackFrame frame = event.getTopStackFrame();
-                assertEquals(7, frame.getSourceSection().getStartLine());
+                assertEquals(8, frame.getSourceSection().getStartLine());
                 assertEquals("6", frame.eval("bar() * 2").toDisplayString());
+                event.prepareContinue();
+            });
+            // breakpoint inside bar
+            expectSuspended((SuspendedEvent event) -> {
+                DebugStackFrame frame = event.getTopStackFrame();
+                assertEquals("24", frame.eval("z").toDisplayString());
+                assertEquals("3", frame.eval("a + b").toDisplayString());
+                assertEquals(7, frame.getSourceSection().getStartLine());
                 event.prepareContinue();
             });
             assertEquals("10", tester.expectDone());
@@ -243,31 +269,7 @@ public class PythonDebugTest {
     }
 
     @Test
-    @SuppressWarnings("try")
-    public void testBreakpointBuiltin() throws Throwable {
-        Assume.assumeFalse("TODO: debugger tests are broken on Bytecode DSL", Boolean.getBoolean("python.EnableBytecodeDSLInterpreter"));
-        final Source source = Source.newBuilder("python", "" +
-                        "def foo():\n" +
-                        "  a = 1\n" +
-                        "  breakpoint()\n" +
-                        "  return 1\n" +
-                        "foo()\n", "test_breakpoint_builtin.py").buildLiteral();
-
-        try (DebuggerSession session = tester.startSession()) {
-            tester.startEval(source);
-
-            expectSuspended((SuspendedEvent event) -> {
-                DebugStackFrame frame = event.getTopStackFrame();
-                assertEquals(3, frame.getSourceSection().getStartLine());
-                event.prepareContinue();
-            });
-            assertEquals("1", tester.expectDone());
-        }
-    }
-
-    @Test
     public void testConditionalBreakpointInFunction() throws Throwable {
-        Assume.assumeFalse("TODO: debugger tests are broken on Bytecode DSL", Boolean.getBoolean("python.EnableBytecodeDSLInterpreter"));
         final Source source = Source.newBuilder("python", "" +
                         "def fun():\n" +
                         "  def prod(n):\n" +
@@ -313,7 +315,6 @@ public class PythonDebugTest {
 
     @Test
     public void testConditionalBreakpointGlobal() throws Throwable {
-        Assume.assumeFalse("TODO: debugger tests are broken on Bytecode DSL", Boolean.getBoolean("python.EnableBytecodeDSLInterpreter"));
         final Source source = Source.newBuilder("python", "" +
                         "values = []\n" +
                         "for i in range(0, 10):\n" +
@@ -336,8 +337,51 @@ public class PythonDebugTest {
     }
 
     @Test
+    public void testGeneralLocals() throws Throwable {
+        final Source source = Source.newBuilder("python", """
+                        def gen_fun(a, b):
+                            yield 1
+                            c = 3
+                            yield 2
+                        r = 0
+                        for i in gen_fun(1,2):
+                            r += i
+                        r
+                        """, "testGeneratorLocals.py").buildLiteral();
+
+        try (DebuggerSession session = tester.startSession()) {
+            session.install(Breakpoint.newBuilder(DebuggerTester.getSourceImpl(source)).lineIs(2).build());
+            session.install(Breakpoint.newBuilder(DebuggerTester.getSourceImpl(source)).lineIs(4).build());
+            tester.startEval(source);
+
+            expectSuspended((SuspendedEvent event) -> {
+                DebugStackFrame frame = event.getTopStackFrame();
+                assertEquals(2, frame.getSourceSection().getStartLine());
+                checkStack(frame, "gen_fun", "a", "1", "b", "2");
+                event.prepareContinue();
+            });
+            expectSuspended((SuspendedEvent event) -> {
+                DebugStackFrame frame = event.getTopStackFrame();
+                assertEquals(2, frame.getSourceSection().getStartLine());
+                event.prepareContinue();
+            });
+            expectSuspended((SuspendedEvent event) -> {
+                DebugStackFrame frame = event.getTopStackFrame();
+                assertEquals(4, frame.getSourceSection().getStartLine());
+                checkStack(frame, "gen_fun", "a", "1", "b", "2", "c", "3");
+                event.prepareContinue();
+            });
+            expectSuspended((SuspendedEvent event) -> {
+                DebugStackFrame frame = event.getTopStackFrame();
+                assertEquals(4, frame.getSourceSection().getStartLine());
+                event.prepareContinue();
+            });
+            assertEquals("3", tester.expectDone());
+        }
+    }
+
+    @Test
     public void testReenterArgumentsAndValues() throws Throwable {
-        Assume.assumeFalse("TODO: debugger tests are broken on Bytecode DSL", Boolean.getBoolean("python.EnableBytecodeDSLInterpreter"));
         // Test that after a re-enter, arguments are kept and variables are cleared.
         final Source source = Source.newBuilder("python", "" +
                         "def main():\n" +
@@ -365,7 +409,7 @@ public class PythonDebugTest {
 
             expectSuspended((SuspendedEvent event) -> {
                 DebugStackFrame frame = event.getTopStackFrame();
-                assertEquals(6, frame.getSourceSection().getStartLine());
+                assertEquals("first breakpoint at 6", 6, frame.getSourceSection().getStartLine());
                 checkStack(frame, "fnc", "n", "11", "m", "20");
                 event.prepareStepOver(4);
             });
@@ -382,7 +426,7 @@ public class PythonDebugTest {
             });
             expectSuspended((SuspendedEvent event) -> {
                 DebugStackFrame frame = event.getTopStackFrame();
-                assertEquals(6, frame.getSourceSection().getStartLine());
+                assertEquals("first breakpoint at 6", 6, frame.getSourceSection().getStartLine());
                 checkStack(frame, "fnc", "n", "11", "m", "20");
             });
             assertEquals("50.0", tester.expectDone());
@@ -392,7 +436,6 @@ public class PythonDebugTest {
     @Test
     @SuppressWarnings("deprecation")
     public void testGettersSetters() throws Throwable {
-        Assume.assumeFalse("TODO: debugger tests are broken on Bytecode DSL", Boolean.getBoolean("python.EnableBytecodeDSLInterpreter"));
         final Source source = Source.newBuilder("python", "" +
                         "class GetterOnly:\n" +
                         "  def __get__(self):\n" +
@@ -462,7 +505,6 @@ public class PythonDebugTest {
 
     @Test
     public void testInspectJavaArray() throws Throwable {
-        Assume.assumeFalse("TODO: debugger tests are broken on Bytecode DSL", Boolean.getBoolean("python.EnableBytecodeDSLInterpreter"));
         final Source source = Source.newBuilder("python", "" +
                         "import java\n" +
                         "a_int = java.type('int[]')(3)\n" +
@@ -508,9 +550,17 @@ public class PythonDebugTest {
 
     @Test
     public void testSourceFileURI() throws Throwable {
-        Assume.assumeFalse("TODO: debugger tests are broken on Bytecode DSL", Boolean.getBoolean("python.EnableBytecodeDSLInterpreter"));
+        testSourceFileURIImpl(false);
+    }
+
+    @Test
+    public void testSourceFileURIBytecode() throws Throwable {
+        testSourceFileURIImpl(true);
+    }
+
+    private void testSourceFileURIImpl(boolean runFromBytecode) throws Throwable {
         if (System.getProperty("os.name").toLowerCase().contains("mac")) {
-            // on the mac machines we run with symlinked directories and such and it's annoying to
+            // on the mac machines we run with symlinked directories and such, and it's annoying to
             // cater for that
             return;
         }
@@ -524,6 +574,11 @@ public class PythonDebugTest {
                             "sys.path.insert(0, '" + tempDir.toString() + "')\n" +
                             "import imported\n" +
                             "imported.sum(2, 3)\n").getBytes());
+
+            if (runFromBytecode) {
+                compileToBytecode(importedFile, importingFile);
+            }
+
             Source source = Source.newBuilder("python", importingFile.toFile()).build();
             try (DebuggerSession session = tester.startSession()) {
                 Breakpoint breakpoint = Breakpoint.newBuilder(importingFile.toUri()).lineIs(4).build();
@@ -558,6 +613,47 @@ public class PythonDebugTest {
             }
         } finally {
             deleteRecursively(tempDir);
+        }
+    }
+
+    private void compileToBytecode(Path... files) {
+        StringBuilder sourceCode = new StringBuilder("import py_compile\n");
+        for (Path file : files) {
+            sourceCode.append("py_compile.compile(r\"").append(file).append("\")\n");
+        }
+        Source compileSource = Source.newBuilder("python", sourceCode.toString(), "compile_source_uri.py").buildLiteral();
+        tester.startEval(compileSource);
+        tester.expectDone();
+    }
+
+    @Test
+    public void testInlineEvaluationBreakpointBuiltin() throws Throwable {
+        final Source source = Source.newBuilder("python", """
+                        a = 1
+                        breakpoint()
+                        b = 2
+                        breakpoint # not invoking, therefore no breakpoint inserted
+                        """, "test_inline.py").buildLiteral();
+
+        try (DebuggerSession session = tester.startSession()) {
+            session.install(Breakpoint.newBuilder(DebuggerTester.getSourceImpl(source)).lineIs(1).build());
+            session.install(Breakpoint.newBuilder(DebuggerTester.getSourceImpl(source)).lineIs(3).build());
+            tester.startEval(source);
+            expectSuspended((SuspendedEvent event) -> {
+                DebugStackFrame frame = event.getTopStackFrame();
+                assertEquals(1, frame.getSourceSection().getStartLine());
+                event.prepareContinue();
+            });
+            expectSuspended((SuspendedEvent event) -> {
+                DebugStackFrame frame = event.getTopStackFrame();
+                assertEquals(2, frame.getSourceSection().getStartLine());
+                event.prepareContinue();
+            });
+            expectSuspended((SuspendedEvent event) -> {
+                DebugStackFrame frame = event.getTopStackFrame();
+                assertEquals(3, frame.getSourceSection().getStartLine());
+                event.prepareContinue();
+            });
         }
     }
 
@@ -600,5 +696,9 @@ public class PythonDebugTest {
                 return FileVisitResult.CONTINUE;
             }
         });
+    }
+
+    private static boolean isBytecodeDSL() {
+        return eval("__graalpython__.is_bytecode_dsl_interpreter").asBoolean();
     }
 }
